@@ -1,4 +1,5 @@
 # Materials
+
 | Item | Quantity | Purpose / status |
 | --- | --- | --- |
 | Digilent Basys 3 | 1 | Shared FPGA board |
@@ -14,4 +15,4 @@
 
 Useful lab equipment: multimeter, logic analyzer with adequate sample rate for I2S, oscilloscope, and an audio interface for measurement. These improve diagnosis and evidence but are not prerequisites for the first demo.
 
-Each TRS cable carries both left and right channels. Two cables are needed because input and output are separate connections. No guitar hardware or microphone preamp is required.
+Each TRS cable carries both left and right channels. Two cables are needed because input and output are separate connections.

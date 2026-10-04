@@ -1,4 +1,5 @@
 # Work split
+
 | Area | Primary owner | Review / handoff |
 | --- | --- | --- |
 | Audio clocks, resets, I2S RX/TX, stereo FIFOs | Robel | An reviews pin and interface contracts |
@@ -12,6 +13,7 @@
 | Board integration and release measurements | Shared | Both reproduce final demo |
 
 ## Handoffs
+
 1. Robel defines sample/frame handshake and DSP parameter consumption; An defines packet transport and shadow-bank interface. Agree together before implementation.
 2. An delivers a UART endpoint testable from a PC before ESP32 integration.
 3. Robel delivers a single biquad per channel with model comparison before the full EQ cascade.

@@ -1,7 +1,9 @@
-# Control contract â€” draft
+# Control contract - draft
+
 Initial link: 3.3 V UART, 115200 baud, common ground. UART is control only. Pin choices and final framing remain undecided.
 
 ## Required behavior
+
 - Version/identity query and status query.
 - Read/write shadow parameters, validate ranges, commit a preset, and bypass.
 - ACK/NACK with command sequence identifiers and a corruption check.
@@ -11,6 +13,7 @@ Initial link: 3.3 V UART, 115200 baud, common ground. UART is control only. Pin 
 - Bad or partial packets cannot alter active parameters. A lost controller cannot stall audio.
 
 ## Decisions required before coding
+
 | Decision | Owner |
 | --- | --- |
 | Packet delimiter, length, byte order, payload limits | An proposes; both review |

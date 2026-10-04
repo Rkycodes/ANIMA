@@ -1,5 +1,7 @@
 # RTL
-Synthesizable SystemVerilog lives here. Planned directories:
+
+Synthesizable Verilog (.v) lives here. Use Verilog-2001 for RTL. SystemVerilog (.sv) is available for verification under sim/. Planned directories:
+
 - audio/: clocks, I2S receiver/transmitter, stereo frame transport.
 - dsp/: gain, biquad engine, cascade, linked compressor, saturation.
 - control/: UART, packet parser, shadow register bank, coherent commit.

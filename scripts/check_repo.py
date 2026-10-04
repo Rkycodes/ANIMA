@@ -6,10 +6,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = (
-    "README.md", "CONTRIBUTING.md", "config/project.json",
+    "README.md", "config/project.json",
     "docs/architecture.md", "docs/ownership.md", "docs/roadmap.md",
     "docs/protocol.md", "docs/numerics.md", "docs/verification.md",
-    "hardware/BOM.md", "hardware/wiring.md", "rtl/README.md",
+    "hardware/BOM.md", "rtl/README.md",
     "model/README.md", "sim/README.md", "firmware/esp32/README.md",
     ".github/workflows/ci.yml",
 )
@@ -22,7 +22,7 @@ def check():
             errors.append(f"Missing required file: {name}")
     for path in ROOT.rglob("*"):
         relative = path.relative_to(ROOT)
-        if any(part.startswith(".") for part in relative.parts):
+        if any(part in {".git", ".venv", "__pycache__", "build", "obj_dir"} for part in relative.parts):
             continue
         if not path.is_file() or path.suffix not in {".md", ".py", ".json", ".yml"}:
             continue
@@ -31,11 +31,35 @@ def check():
         except UnicodeDecodeError:
             errors.append(f"{relative}: invalid UTF-8")
             continue
+        if path.suffix == ".md" and any(
+            marker in content for marker in ("\u00e2\u20ac", "\u00e2\u2020", "\ufffd")
+        ):
+            errors.append(f"{relative}: possible corrupted text encoding")
         if not content.endswith("\n"):
             errors.append(f"{relative}: missing final newline")
         if any(line.rstrip() != line for line in content.splitlines()):
             errors.append(f"{relative}: trailing whitespace")
         if path.suffix == ".md":
+            lines = content.splitlines()
+            in_fence = False
+            for index, line in enumerate(lines):
+                if line.startswith("```"):
+                    in_fence = not in_fence
+                    continue
+                if in_fence:
+                    continue
+                if re.match(r"^#{1,6} ", line):
+                    if index and lines[index - 1]:
+                        errors.append(f"{relative}:{index + 1}: heading needs a preceding blank line")
+                    if index + 1 < len(lines) and lines[index + 1]:
+                        errors.append(f"{relative}:{index + 1}: heading needs a following blank line")
+                if index and (line.startswith("|") or re.match(r"^(?:- |\d+\. )", line)):
+                    previous = lines[index - 1]
+                    same_block = previous.startswith("|") if line.startswith("|") else re.match(r"^(?:- |\d+\. )", previous)
+                    if previous and not same_block:
+                        errors.append(f"{relative}:{index + 1}: table/list needs a preceding blank line")
+            if in_fence:
+                errors.append(f"{relative}: unclosed code fence")
             for link in re.findall(r"\[[^\]]*\]\(([^)]+)\)", content):
                 if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", link) or link.startswith("#"):
                     continue

@@ -1,4 +1,5 @@
-# Numeric design â€” draft
+# Numeric design - draft
+
 Begin with a floating-point reference, then implement an explicitly bit-exact fixed-point model before DSP RTL.
 
 Candidate formats for evaluation: 32-bit internal samples with 27 fractional bits, 32-bit coefficients with 29 fractional bits, wider filter state (candidate 40 bits), and wide accumulators (candidate 80 bits). These are not frozen interfaces.

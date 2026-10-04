@@ -1,5 +1,7 @@
 # Verification and release evidence
+
 ## Block checks
+
 - I2S: known positive/negative samples, channel order, one-bit delay, slot padding, framing and reset.
 - FIFOs/CDC: unequal clocks, reset in each domain, backpressure, overflow/underflow visibility.
 - DSP: impulse, tones, sweep, silence, seeded noise, extremes; RTL equals the fixed-point model under defined rounding.
@@ -9,7 +11,9 @@
 - Integration: disconnected controller and telemetry saturation leave audio running.
 
 ## Proposed acceptance targets
+
 Targets require measurement; none have been achieved yet.
+
 - Digital EQ response within 0.5 dB of the agreed reference over the specified operating range.
 - End-to-end latency below 5 ms for the default chain without intentional delay.
 - 30 minutes of continuous operation without FIFO errors or missed audio frames.
