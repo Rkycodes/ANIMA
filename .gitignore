@@ -1,0 +1,38 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+# Generated builds and waveforms
+build/
+dist/
+out/
+obj_dir/
+*.vcd
+*.fst
+*.wdb
+*.bit
+*.bin
+*.dcp
+*.jou
+*.log
+.Xil/
+*.cache/
+*.runs/
+*.sim/
+*.hw/
+*.gen/
+ip_user_files/
+# ESP32 / PlatformIO
+.pio/
+sdkconfig.old
+# OS
+.DS_Store
+Thumbs.db
