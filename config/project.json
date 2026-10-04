@@ -1,0 +1,14 @@
+{
+  "name": "ANIMA",
+  "board": "Digilent Basys 3",
+  "fpga": "xc7a35tcpg236-1",
+  "audio_interface": "Digilent Pmod I2S2",
+  "target_sample_rate_hz": 48000,
+  "sample_bits": 24,
+  "i2s_slot_bits": 32,
+  "channels": 2,
+  "eq_bands_per_channel": 5,
+  "initial_control_transport": "UART",
+  "initial_control_baud": 115200,
+  "status": "planned; hardware and timing unvalidated"
+}
