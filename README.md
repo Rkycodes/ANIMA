@@ -8,9 +8,40 @@ A stereo audio processor on the Basys 3 Artix-7 FPGA, with ESP32 wireless contro
 
 ## Planned system
 
-Stereo line input -> Pmod I2S2 ADC -> FPGA input gain -> five-band EQ -> stereo-linked compressor -> output gain -> Pmod I2S2 DAC -> powered speakers or amplifier.
+**Planned architecture; not implemented or hardware validated.** Solid arrows carry audio; dashed arrows carry control or observations. Frame handoffs do not specify a FIFO or clock-domain crossing implementation.
 
-Target: 48 kHz, 24-bit stereo samples in 32-bit I2S slots. The FPGA processes audio; the ESP32 hosts controls and sends parameter updates over UART. Wi-Fi carries control traffic only. VGA meters and an ESP32 web interface follow the working audio core.
+```mermaid
+flowchart LR
+  subgraph AUDIO["Planned audio path"]
+    SRC["Stereo line source"] --> ADC["Pmod I2S2 ADC"]
+    ADC --> RX["I2S receiver"] --> INFRAME["Stereo frame handoff"]
+    INFRAME --> ING["Input gain"] --> EQ["Five-band EQ per channel"]
+    EQ --> COMP["Stereo-linked compressor"] --> OUTG["Output gain / saturation"]
+    OUTG --> OUTFRAME["Stereo frame handoff"] --> TX["I2S transmitter"]
+    TX --> DAC["Pmod I2S2 DAC"] --> SPK["Powered speakers / amplifier"]
+  end
+  subgraph CONTROL["Planned control path"]
+    WIFI["Wireless controls / web UI"] -.-> ESP["ESP32"]
+    ESP -.-> UART["FPGA UART / parser"] -.-> SHADOW["Shadow parameters"]
+    SHADOW -.-> ACT["Atomic parameter activation at frame boundary"]
+  end
+  subgraph OBS["Planned observations / display"]
+    TEL["Nonblocking coherent telemetry"] -.-> VGA["VGA meters"]
+  end
+  ACT -.-> ING
+  ACT -.-> EQ
+  ACT -.-> COMP
+  ACT -.-> OUTG
+  OUTFRAME -.-> TEL
+  COMP -.-> TEL
+  ACT -.-> TEL
+  TEL -.-> UART
+  UART -.-> ESP
+```
+
+Clock ownership, domain topology, reset sequencing, frame handshakes, buffering, pins, and control interfaces remain design decisions. The first implementation milestone is stereo bypass without DSP. See the [architecture and next design gate](docs/architecture.md) and [shared source register](docs/sources.md).
+
+Target: 48 kHz, 24-bit stereo samples in 32-bit I2S slots. The planned FPGA will process audio; the ESP32 will host controls and send parameter updates over UART. Wi-Fi carries control traffic only. VGA meters and an ESP32 web interface follow the working audio core.
 
 ## Repository layout
 

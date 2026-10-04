@@ -1,6 +1,7 @@
 # Project documents
 
 - [Architecture](architecture.md)
+- [Shared source register](sources.md)
 - [Ownership and handoffs](ownership.md)
 - [Roadmap](roadmap.md)
 - [Development workflow](development.md)
