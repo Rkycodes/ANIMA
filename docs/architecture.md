@@ -1,64 +1,74 @@
 # Architecture - planned
 
-This repository is a scaffold. The following is intended behavior, not implemented audio, synthesis, timing closure, or hardware evidence. Manufacturer findings use stable IDs in the [shared source register](sources.md); proposals and unresolved choices are identified below.
+No audio implementation or hardware evidence exists yet. The requirements below describe intended behavior; sample formats and clock configurations remain proposals. No frozen clock tree or binary interface is documented. See the [system diagram](../README.md#planned-system), [source index](sources.md) and [verification plan](verification.md).
 
-## Ownership and audio frames
+## Responsibilities and flow
 
-Robel owns audio clocks/reset, I2S reception/transmission, frame transport, gain, EQ, compression, saturation, and reference models. An owns ESP32 communications/web controls, FPGA UART/parser, shadow parameters, acknowledgements, and serial diagnostics. Both review the frame/parameter boundary, CDC, pins, and integration. VGA is shared: An owns layout/control; Robel owns meters/clocks/integration. See [ownership](ownership.md).
+The FPGA owns audio processing; the ESP32 owns wireless/web controls and sends parameters over UART. Wi-Fi carries no audio. Planned DSP order: input gain -> five biquads per channel -> stereo-linked compressor -> output gain/saturation.
 
-Planned chain: I2S receiver -> stereo frame handoff -> input gain -> five biquad sections per channel -> stereo-linked compressor -> output gain/saturation -> stereo frame handoff -> I2S transmitter. A frame pairs L[n] with R[n] from the same sample interval; neither channel advances alone. EQ histories are independent for each channel and section even when coefficients match. The compressor applies one shared gain to both channels; deriving its envelope from the larger channel level is a proposal pending model evaluation.
+| Boundary | Owner / integration responsibility |
+| --- | --- |
+| Audio clocks/reset, I2S RX/TX, frame transport, DSP and reference models | Robel |
+| ESP32, FPGA UART/parser, shadow parameters, acknowledgements and serial diagnostics | An |
+| Frame/parameter contract, CDC, pins and board integration | Joint review; Robel defines consumption, An defines transport |
+| VGA | An: layout/control; Robel: meters/clocks/integration |
 
-Proposed format: 48 kHz, signed two's-complement 24-bit samples, in two 32-bit I2S slots. The raw internal stereo payload is 2 x 24 = 48 bits, excluding validity, sequence, generation, timestamps, and fault metadata. The wire frame occupies 64 bit clocks. Payload packing, handshake, backpressure, metadata, DSP widths, rounding, coefficient representation, and filter-state reset remain open; [numeric formats](numerics.md) are candidates rather than contracts.
+[Ownership](ownership.md) defines the full work split. VGA 640 x 480 with procedural drawing/font ROM and the web interface follow bypass/EQ; FFT remains a stretch goal.
 
-## Manufacturer-supported clock and serial requirements
+## Audio and control contracts
 
-- **SRC-001:** Basys 3 rev. C has a 100 MHz reference at W5, an MRCC input in bank 34. MMCM/PLL clock generation is available subject to placement/routing rules. This identifies the board reference, not a selected DSP frequency or new pin assignment.
-- **SRC-002:** Pmod I2S2 schematic A.0 exposes separate ADC and DAC MCLK/LRCK/SCLK nets through J1. JP1 selects ADC master/slave through its SDOUT mode circuit. These clocks are not shown as already tied together; verify the physical board revision and jumper before wiring. **SRC-003** manual access remains pending (HTTP 403).
-- **SRC-004:** CS5343 uses I2S, with 24-bit two's-complement data and a one-bit MSB delay after the LRCK transition. In single-speed slave mode (4-54 kHz), MCLK/LRCK supports 256, 384, 512, 768; SCLK/LRCK is 64 for 256/512 and 48 or 64 for 384/768. At 48 kHz, master mode also supports those MCLK ratios and generates 64 SCLK per frame. Its mode selection is sampled at startup; avoid driving outputs when configured as master. Review electrical timing on pp. 9-10, not only nominal ratios. The consulted F5 PDF is marked Draft.
-- **SRC-005:** CS4344 requires synchronous MCLK, LRCK, and SCLK (no particular mutual phase specified). At 48 kHz its table lists MCLK/LRCK 256, 384, 512, 768, 1024. External SCLK accepts up to 24-bit I2S, sampled on rising edges with the I2S MSB delay. At 256/512/1024, internal SCLK mode is 32 Fs and only 16-bit I2S: do not use it for the proposed 24-bit/32-slot link. External mode detection requires 16 SCLK rising edges during a LRCK phase; two frames without edges return it to internal mode. Review setup/hold and duty-cycle limits on p. 9.
+| Area | Required semantics / proposed values |
+| --- | --- |
+| Stereo frame | Paired L[n]/R[n] from the same sample interval; channels never advance independently |
+| Proposed sample format | 48 kHz, signed two's-complement 24-bit samples; two 32-bit I2S slots, 64 wire bit clocks per frame |
+| Raw payload | 48 bits per stereo frame, excluding metadata; packing, metadata and handshake remain open |
+| EQ | Independent history for every channel/section, even with shared coefficients |
+| Compressor | One gain applied to both channels; maximum-channel envelope is a proposal pending modeling |
+| Numeric policy | Floating-point reference followed by a bit-exact model before DSP RTL; widths, rounding, coefficient representation and state reset remain open in [numeric design](numerics.md) |
+| UART | Control only; [protocol](protocol.md) owns framing, fields, validation and acknowledgements. Its 3.3 V/115200-baud link is a draft; pins and interfaces are not frozen |
+| Activation | Validate and hold a complete shadow snapshot until accepted; activate one generation at a frame boundary, without mixing generations in flight. Later writes cannot alter a pending snapshot |
+| Acknowledgements | Receipt ACK is separate from applied generation, which is reported only after audio-side acceptance |
+| Telemetry | Coherent levels, gain reduction, active generation and fault snapshots; congestion may drop/coalesce updates and must never block audio |
 
-The shared 48 kHz MCLK ratios are therefore 256/384/512/768. Their arithmetic frequencies are 12.288/18.432/24.576/36.864 MHz; 64 Fs gives SCLK 3.072 MHz and LRCK 48 kHz. These are codec-compatible requests, not proven FPGA outputs. A candidate is common 256 Fs MCLK with external 64 Fs SCLK and ADC slave mode. An alternative is ADC master mode, forwarding its LRCK/SCLK to the DAC while sharing MCLK; direction, startup contention, routing and timing need review before selecting it. Independent free-running ADC/DAC sample clocks are unsuitable for indefinite bypass without rate correction.
+Commit/busy behavior, snapshot transfer, generation wrap, defaults and CDC remain joint decisions. Atomic coefficient activation alone does not ensure click-free transitions; transition/state handling needs model and audio evidence.
 
-**SRC-006/SRC-007:** 7-series MMCM/PLL and dedicated clock buffers are the appropriate resources to investigate. Clocking Wizard can return best-attempt actual frequencies rather than requested values. It supports MMCM fractional feedback and CLKOUT0 division in 1/8 increments; this does not prove the candidate frequencies achievable. Record the exact part, Vivado/IP version, input tolerance, legal PFD/VCO/dividers, actual output/error, phase/duty cycle, estimated jitter and clock routing before choosing a clock tree. Routed timing and hardware clock measurements are separate evidence. Avoid an unconstrained fabric divider or alternating periods presented as an exact low-jitter audio clock.
+## Clock and codec constraints
 
-## Domain topology, reset and startup
+Source IDs below resolve to exact manufacturer references in [sources](sources.md).
 
-Choose topology after codec configuration and clock feasibility review:
+| Source | Constraint affecting ANIMA |
+| --- | --- |
+| SRC-001 | Basys 3 rev. C: 100 MHz reference at W5, MRCC bank 34; MMCM/PLL use is subject to clock routing rules. This does not select a DSP frequency or connector pin |
+| SRC-002 / SRC-003 | Pmod schematic A.0 exposes separate ADC/DAC MCLK, LRCK and SCLK nets; JP1 selects ADC mode through SDOUT. Verify board revision, jumper and directions; the manual remains unavailable |
+| SRC-004 | CS5343: 24-bit I2S, one-bit MSB delay. Single-speed slave (4-54 kHz): MCLK/Fs 256/384/512/768; SCLK/Fs 64 at 256/512, 48 or 64 at 384/768. At 48 kHz, master mode supports those MCLK ratios with 64 SCLK/frame. Mode is sampled at startup; do not drive its clock outputs in master mode |
+| SRC-005 | CS4344: synchronous MCLK/LRCK/SCLK, no prescribed mutual phase; 48 kHz MCLK/Fs 256/384/512/768/1024. External SCLK accepts up to 24-bit I2S on rising edges with the MSB delay. Internal SCLK at 256/512/1024 is 32 Fs and only 16-bit I2S. External detection needs 16 rising edges in a LRCK phase; two frames without edges revert to internal mode |
+| SRC-006 / SRC-007 | Use reviewed clock resources/constraints. Wizard actual frequencies may differ from requests; fractional MMCM feedback/CLKOUT0 division has 1/8 increments. Outputs must not be used before LOCKED; reset MMCM/PLL after lock loss |
 
-| Candidate | Benefits | Obligations before selection |
-| --- | --- | --- |
-| Common processing domain | I2S state machines and bypass/DSP use one suitable clock with enables; frame handoff can remain synchronous | Show codec edge timing, legal clock distribution and sufficient processing throughput; serial pins still require I/O timing constraints |
-| Separate audio and DSP domains | DSP frequency can be chosen independently of serial timing | Transfer coherent complete frames through a reviewed CDC mechanism; define resets, bounded buffering and clock relationships |
+Shared 48 kHz MCLK ratios 256/384/512/768 correspond arithmetically to 12.288/18.432/24.576/36.864 MHz. The proposed 64 Fs SCLK is 3.072 MHz. These are codec-compatible requests, not proven FPGA outputs. Candidates are shared 256 Fs MCLK with external 64 Fs SCLK and ADC slave, or shared MCLK with ADC-master LRCK/SCLK forwarded to DAC. Selection, startup contention, I/O setup/hold, duty cycle and routing require review.
 
-Related clocks still need timing analysis; they are not automatically asynchronous. An asynchronous FIFO can safely cross asynchronous domains, but cannot correct sustained producer/consumer rate mismatch. Independently synchronizing sample bits does not preserve word coherence. A coherent handshake or FIFO must preserve the whole frame; mechanism and FIFO depth remain undecided. UART, parameter, telemetry, and display crossings also need explicit contracts.
+Record exact device/tool versions, input tolerance, legal PFD/VCO/dividers, actual frequency/error, phase/duty cycle, estimated jitter and routing before selecting clocks. Do not substitute unconstrained fabric division or alternating periods for a validated audio clock. Routed timing and measured clocks require separate evidence.
 
-Robel proposes a startup state sequence for joint review: safe output/invalid frames -> clock generation/reset -> stable lock -> codec initialization -> complete LRCK-aligned frame -> bypass running. Reset deassertion must be synchronized to each selected domain; clock loss must invalidate partial frames and invoke reviewed recovery. SRC-006 says clock outputs must not be used before LOCKED, and MMCM/PLL must be reset after lock loss. Define how reset is asserted when a domain stops, how both ends of any CDC are flushed, and how active generations recover.
+## Domains, reset and scheduling
 
-SRC-005 initialization requires MCLK/LRCK and includes output ramp/settling; FPGA lock does not imply codec readiness. Startup wait, ADC mode sampling, DAC external-SCLK detection, mute/release policy and power-cycle handling must be resolved from the board configuration and datasheets. No codec reset pin is assumed. Use zero output while clocks remain valid as a candidate safe state; define behavior when clocks themselves are unavailable.
+- **Topology open:** a common processing domain with enables avoids an audio/DSP crossing; separate domains require coherent frame CDC. Both need codec I/O timing and sufficient throughput. Related clocks still require timing analysis and are not automatically asynchronous.
+- **Coherence:** independently synchronizing sample bits is invalid. Transfer complete frames through a reviewed handshake or FIFO. Async FIFOs support safe CDC, not sustained producer/consumer rate correction. Independent free-running ADC/DAC sample clocks require rate correction for indefinite bypass. Buffer type/depth remain open.
+- **Reset/startup:** synchronize reset release per selected domain; suppress partial/invalid frames until clocks and codecs are ready and a complete LRCK-aligned frame is available. Clock loss invalidates partial frames and requires recovery. FPGA lock does not imply codec readiness. Resolve ADC mode sampling, DAC external-clock detection/ramp/settling, mute/release, stopped-domain reset assertion, CDC flushing, generation recovery and power cycling. No codec reset pin is assumed.
+- **Deadlines:** I2S cannot wait for DSP or control. Define frame alignment, handshake/backpressure, bounded delay, startup priming and transmit deadlines before coding. At an example 100 MHz/48 kHz, the average budget is 2083.33 cycles/stereo frame; 100 MHz is not selected. Throughput depends on initiation interval, not latency alone; account for both channels, stalls and the shortest actual frame interval.
+- **Faults:** expose partial/malformed-frame, overflow, underflow, deadline and clock-loss counters. Silence, discard/resynchronize, repeat or restart policies remain open; never mix channel indices or conceal rate mismatch. Define output safety both with and without running clocks. Controller loss and telemetry overload must not stall audio.
 
-## Scheduling and faults
+UART, parameter, telemetry and display crossings need their own coherent contracts. Detailed FSMs and buffering implementation belong with the eventual modules and tests.
 
-I2S traffic is periodic and cannot wait for control or processing. A proposed scheduler accepts a complete stereo frame, processes both channels, and presents a complete output before its assigned transmit deadline. Agree frame alignment, fixed/bounded delay, ready/valid or equivalent semantics, stall limits, buffer occupancy and startup priming before coding.
+## Next gate: stereo bypass
 
-At an example 100 MHz processing clock and 48 kHz frame rate, the average budget is 100,000,000 / 48,000 = 2083.33 cycles per stereo frame. This is arithmetic, not an integer fixed schedule or a frozen DSP clock. Throughput depends on initiation interval: a pipeline with long latency may still accept frames fast enough, whereas low latency alone does not establish sustained throughput. Account for both channels, all stages, stalls, resource sharing, and the shortest actual frame interval; prove deadlines separately from end-to-end latency.
+First implementation: RX -> paired frame transport -> TX, without gain, EQ or compression.
 
-Define and expose counters for malformed/partial frames, overflow, underflow, missed deadlines and clock loss. Candidate recovery is silence on unavailable output, discarding partial frames and resynchronizing on a complete stereo boundary; whether to drop, repeat, mute or restart must be agreed and tested. Never pair L[n] with R[n+1] or silently conceal a rate mismatch. Telemetry overload and a disconnected controller cannot stall audio.
+| Gate | Required decision / evidence |
+| --- | --- |
+| Codec configuration | Robel records board revision, JP1, voltage, clock directions, ratio, serial format and electrical timing; both review wiring |
+| Clock feasibility/reset | Evaluate the exact device in Vivado; select topology from actual clock results and agree constraints/startup/recovery |
+| Stereo frame contract | Robel proposes payload/metadata, handshake, deadlines, buffering and faults; An reviews control interaction |
+| Bypass acceptance | Bit-exact digital samples, signed extremes, channel order, MSB delay/padding, no loss/duplication, bounded delay, reset/clock-loss/underflow recovery and independence from UART/telemetry load |
 
-## Parameter activation and observations
+Proposed hardware exit: measured clocks/serial format, channel identification, audible analog bypass and a 30-minute error-free run, with timing/CDC review and reproducible configuration. Digital equality and analog behavior are separate checks; none is achieved yet.
 
-An proposes UART framing, bounded parsing, corruption checks and shadow writes; Robel defines parameter consumption. Jointly agree validation, field widths/units, snapshot lifetime, commit/busy behavior, generation wrap, reset defaults, CDC and acknowledgement semantics in [protocol](protocol.md). Do not treat its draft baud rate or interfaces as frozen.
-
-Planned atomic activation: validate a complete shadow set, hold its snapshot stable until accepted, then switch all affected stages to one generation at an agreed frame boundary. In-flight frames must not mix generations; choose draining, generation tagging or another demonstrated scheme. Report applied generation only after audio-side acceptance, separately from receipt ACK. Later writes cannot modify a pending snapshot. Atomic coefficient activation does not guarantee click-free transitions; smoothing, crossfade or state handling requires model and audio evidence.
-
-Telemetry is a coherent snapshot of levels, reduction, generation and faults. It may be dropped/coalesced under congestion and never blocks audio. The transfer/refresh mechanisms and register map remain open. VGA 640 x 480, procedural drawing/font ROM and an ESP32 web interface remain proposals after bypass/EQ; FFT remains a stretch goal.
-
-## Next design gate and first implementation milestone
-
-Recommended teaching/design block: trace one stereo I2S frame from codec clock edges to paired payload and back, then compare clock ownership alternatives with their startup and deadline requirements.
-
-1. **Codec configuration:** Robel records board revisions, JP1 setting, clock directions, selected ratio/serial mode, voltage and datasheet timing. Both review; resolve SRC-003 manual availability. Do not select FPGA connector pins by inference.
-2. **Clock feasibility/reset:** Robel evaluates candidate clocks for the exact device in Vivado, records actual frequency/error and tool estimates, proposes clock constraints and reset/startup/recovery states. Choose common or separate domains based on evidence; do not infer achievable frequency, jitter or timing closure from arithmetic.
-3. **Stereo frame contract:** Robel proposes paired payload/metadata, handshakes, deadlines, buffering, fault policy and resets; An reviews control interaction. Freeze only the reviewed bypass contract, not speculative DSP widths or FIFO depths.
-4. **Stereo bypass acceptance:** first implementation is RX -> paired frame transport -> TX without gain, EQ or compressor. Require simulated bit-exact signed samples, channel order, MSB delay and padding; no frame loss/duplication during the agreed run; bounded documented delay; reset/clock-loss/underflow recovery; and independence from UART/telemetry load. Proposed hardware exit includes measured clocks/serial format, channel identification, audible analog bypass and a 30-minute error-free run, supported by timing/CDC review and reproducible configuration. Digital equality and analog codec behavior are different checks. None has been achieved here.
-
-An can develop the UART framing and shadow/commit proposal in parallel, including identity/status examples and malformed/duplicate/reset behavior. Transport design can proceed before audio integration; applied-generation behavior waits for the reviewed frame contract. Build DSP only after stereo bypass acceptance.
+Next teaching/design block: trace one stereo I2S frame from clock edges to paired payload and back. An can develop UART framing and shadow/commit proposals in parallel; applied-generation integration waits for the frame contract. DSP follows accepted bypass.
