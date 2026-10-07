@@ -42,3 +42,13 @@ Keep main usable. Work on focused feature branches and review each other's pull 
 Recommended permanent location: C:/Users/robel/Documents/Projects/ANIMA. Create that checkout in your own terminal. To preserve unpublished setup commits, clone the current local repository into that folder, then set origin to https://github.com/Rkycodes/ANIMA.git.
 
 Once the setup branch has been published and merged, a fresh checkout elsewhere can be created with git clone. A fresh clone of GitHub before publication will contain only the existing README.
+
+## Integration follow-up
+
+As of October 6, 2026, An Tiet's [interconnect PR #2](https://github.com/Rkycodes/ANIMA/pull/2) merged into remote main as c0ec042. The merge succeeded; the [repository-check job](https://github.com/Rkycodes/ANIMA/actions/runs/37560901435/job/112597686363) failed on formatting in docs/notes/2026-10-04-interconnect-kickoff.md:
+
+- Missing final newline.
+- Missing blank lines before lists at reported lines 46, 60 and 63.
+- Missing blank line after the heading at reported line 62.
+
+Correct formatting while preserving An's content and attribution. The Node.js deprecation warning was not the failing check. This docs/planning increment is based on 4d8f4db and has not incorporated c0ec042 or modified An's kickoff. Reconcile the branches and repair formatting in a separately authorized integration step; do not overwrite either collaborator's work. A passing check on this branch does not establish that remote main's formatting issue is repaired.

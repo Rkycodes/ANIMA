@@ -34,7 +34,7 @@ Commit/busy behavior, snapshot transfer, generation wrap, defaults and CDC remai
 
 ## Preset consistency requirements
 
-Robel confirmed D-01 and D-02; An's shared-interface review is pending. These specify required behavior, not an implementation or selected pipeline.
+Robel confirmed D-01 and D-02; An's explicit shared-interface review of these two requirements remains pending. D-03 was agreed by Robel and An; its authoritative definition is in [protocol](protocol.md#pending-preset-policy). These specify required behavior, not an implementation or selected pipeline.
 
 | ID | Requirement |
 | --- | --- |
@@ -43,7 +43,19 @@ Robel confirmed D-01 and D-02; An's shared-interface review is pending. These sp
 
 [Editable frame/preset diagram](diagrams/frame-preset-consistency.mmd): frame 10 uses A throughout; frame 11 illustrates B after a permitted activation. Arrows show logical processing order, not clock cycles or simultaneous execution. Frame index and preset generation are distinct identifiers; a generation tag alone does not retain parameter values.
 
-Open: activation readiness/boundary, in-flight parameter retention mechanism, pending B/new C policy, parameter-crossing owner and first integration owner. First hardware milestone scope and latency endpoints/limit still need agreement; the existing sub-5-ms verification target is a proposal. An's seven [interconnect questions](https://github.com/Rkycodes/ANIMA/blob/262a492/docs/notes/2026-10-04-interconnect-kickoff.md) remain proposals for joint review.
+Alternatives under discussion; none selected:
+
+| Approach | Preservation rule / tradeoff |
+| --- | --- |
+| Retain snapshots | Keep each generation's values while any frame still needs them; requires bounded storage and a reuse policy |
+| Capture needed settings | Preserve needed values with the frame before overwriting shared storage; requires complete capture and frame-owned storage |
+| Finish old work first | Robel confirmed that replacement must wait for the last use of A, including compression. New-frame scheduling and deadline impact still need evaluation |
+
+[Snapshot lifetime example](diagrams/preset-snapshot-lifetime.mmd) illustrates the first alternative, without selecting banking, capacity, CDC or scheduling.
+
+Robel's scheduling intent: do not keep extending old-generation work indefinitely during a switch; frames admitted after B activates use B. Receipt/validation alone is not activation, and the activation delay remains open. Buffering waiting audio frames and pending presets is suggested, not selected: these hold different data, add finite capacity, and need separate full/overflow policies. Audio buffering adds latency; continuous audio deadlines still apply. Robel and An agreed latest-pending-wins (D-03), as reported by Robel; see the [control contract](protocol.md#pending-preset-policy). Storage and activation mechanisms remain open.
+
+Open: activation readiness/boundary, in-flight parameter retention mechanism, pending replacement/activation arbitration and acknowledgements, parameter-crossing owner and first integration owner. First hardware milestone scope and latency endpoints/limit still need agreement; the existing sub-5-ms verification target is a proposal. An's [interconnect kickoff](https://github.com/Rkycodes/ANIMA/blob/d77741fc47be789ec7ce2ae14417c2a0c8425738/docs/notes/2026-10-04-interconnect-kickoff.md) remains An Tiet's work; its questions are included in the worksheet below. Use the [architecture worksheet](#architecture-worksheet) to record answers before the next implementation increment.
 
 ## Clock and codec constraints
 
@@ -85,3 +97,142 @@ First implementation: RX -> paired frame transport -> TX, without gain, EQ or co
 Proposed hardware exit: measured clocks/serial format, channel identification, audible analog bypass and a 30-minute error-free run, with timing/CDC review and reproducible configuration. Digital equality and analog behavior are separate checks; none is achieved yet.
 
 Next teaching/design block: trace one stereo I2S frame from clock edges to paired payload and back. An can develop UART framing and shadow/commit proposals in parallel; applied-generation integration waits for the frame contract. DSP follows accepted bypass.
+
+## Architecture worksheet
+
+Working questions for Robel and An, October 6, 2026. These are unanswered prompts, not selected designs. Fill the answer/evidence and owner/review cells together. Mark a box only after the answer has been reviewed and recorded in the authoritative document named below. For an evidence-dependent item, record a blocker and the experiment/owner needed rather than guessing.
+
+The immediate goal is readiness for a small first implementation increment, not completion of every later DSP design. Sections 1-8 cover first-increment contracts; section 9 may be explicitly deferred until the corresponding DSP increment. Section 10 records handoff and planning-exit checks. Do not treat a deferred question as answered.
+
+Confirmed so far: stereo-safe frames and coherent preset replacement are goals; D-01/D-02 are Robel-confirmed and await An's explicit review. D-03 latest-pending-wins is agreed by both: complete valid C may supersede pending B, while incomplete/invalid C leaves B eligible. Low latency is a goal; its limit and endpoints are open. No storage mechanism, clock tree, binary map or RTL implementation is selected here.
+
+### 1. First milestone and acceptance
+
+Record agreed scope in [roadmap](roadmap.md) and pass criteria in [verification](verification.md).
+
+| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | M-01 | What exactly is the first milestone: stereo bypass, PC UART identity/status, parameter activation, or which subset? What is outside this increment? | | |
+| [ ] | M-02 | What observable evidence demonstrates success for each included feature? Which checks are digital and which are analog/hardware? | | |
+| [ ] | M-03 | Where does latency measurement start and end, under what configuration, and what maximum is acceptable? Is the existing proposed sub-5-ms target adopted or revised? | | |
+| [ ] | M-04 | What instruments, vectors, run duration and reproducible commands are needed? Which required equipment is available? | | |
+| [ ] | M-05 | What must be resolved before coding versus tested during implementation? What is the next small implementation task and its acceptance criterion? | | |
+
+### 2. Hardware, wiring and tools
+
+Record physical facts in [materials](../hardware/BOM.md), pin/clock contracts here, and new manufacturer evidence in [sources](sources.md). An's kickoff is an input, not a verified board configuration.
+
+| Done | ID | Question to answer | Answer / evidence or blocker | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | H-01 | What are the exact Basys 3 and Pmod I2S2 revisions, ADC jumper setting and supply/interface voltages? Do the consulted schematic/manual revisions apply? | | |
+| [ ] | H-02 | What exact ESP32 module/dev board, USB-serial device and firmware framework/version will be used? | | |
+| [ ] | H-03 | Which Pmod header/row and FPGA package pins are reserved for audio, UART and other functions? Who checks the source pin table and conflicting uses? | | |
+| [ ] | H-04 | Which ESP32 GPIOs are safe for the chosen UART, considering straps, flash/PSRAM, boot output and board-specific connections? | | |
+| [ ] | H-05 | What are clock/data directions, common-ground requirements and power sequencing? What happens when only one board is powered or either board resets? | | |
+| [ ] | H-06 | Which Vivado/device/IP, Python and simulator versions are available? What codec documentation or tool access remains unavailable? | | |
+
+### 3. Clocks and reset/recovery
+
+Record selected topology and assumptions here; keep tool evidence in [results](../results/README.md). Documented ratios are not clock-feasibility evidence.
+
+| Done | ID | Question to answer | Answer / evidence or blocker | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | C-01 | Who generates ADC/DAC MCLK, SCLK and LRCK? Which codec modes, ratios and sample rate are selected? How are the converter rates coordinated? | | |
+| [ ] | C-02 | What clock-generation configuration is legal for the exact FPGA? What actual frequencies/error, phase, duty cycle, estimated jitter and routing does the tool report? | | |
+| [ ] | C-03 | What clocks run audio, DSP, UART/parser and VGA? Which are common, related or asynchronous, and what timing assumptions establish that classification? | | |
+| [ ] | C-04 | Where are coherent crossings required for frames, parameters, acknowledgements and telemetry? Who owns and reviews each side of each crossing? | | |
+| [ ] | C-05 | What is held safe during startup, how is reset released per domain, and what establishes codec readiness and the first complete valid frame? | | |
+| [ ] | C-06 | What happens on clock loss or either-side reset, including stopped-domain reset assertion, partial-frame invalidation, buffering flush and restart? | | |
+
+### 4. Stereo-frame contract and scheduling
+
+Record the system contract here and its checks in [verification](verification.md). Local implementation mechanics can wait for module design.
+
+| Done | ID | Question to answer | Answer / evidence or blocker | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | F-01 | Are the proposed 48 kHz, signed 24-bit samples and two 32-bit slots adopted? What are LRCK polarity/channel order, MSB delay, sampling edges and padding behavior? | | |
+| [ ] | F-02 | How is the paired 48-bit raw payload packed? What metadata is required, and how are frame index and preset generation distinguished? | | |
+| [ ] | F-03 | What event means a frame is valid, accepted and released? What remains stable while waiting, and is any backpressure permitted? | | |
+| [ ] | F-04 | What are receive, processing and transmit deadlines and bounded delays? What initiation interval/resource schedule meets them for both channels? | | |
+| [ ] | F-05 | Is buffering needed, of what type and justified capacity? How are occupancy, startup priming and sustained rate mismatch handled? | | |
+| [ ] | F-06 | What are observable output/recovery behaviors for missing, duplicate, malformed or late frames, overflow and underflow? Which counters expose them? | | |
+
+### 5. Parameter lifetime and activation
+
+Record parameter transport behavior in [protocol](protocol.md), audio consumption here, and shared ownership in [ownership](ownership.md). D-03 is already selected; the questions below concern its enforcement.
+
+| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | P-01 | Does An explicitly approve D-01 and D-02? Are any qualifications or additional scenarios needed? | | |
+| [ ] | P-02 | What makes a snapshot complete and valid? What validation is done by the controller versus FPGA, and who owns each check? | | |
+| [ ] | P-03 | What is the exact activation boundary and readiness condition? What limits receipt-to-activation delay? | | |
+| [ ] | P-04 | How are values preserved for both channels and all stages of an in-flight frame: retained snapshots, captured settings or completion before activation? What is the reuse condition? | | |
+| [ ] | P-05 | How is pending replacement made atomic, and when does a transfer become immutable? How is coherent publication/acceptance enforced across any selected domains? | | |
+| [ ] | P-06 | If C becomes eligible on the same event as B activation, which wins? What ordering/cutoff makes this repeatable and testable? | | |
+| [ ] | P-07 | How are received, validated/pending, superseded and applied outcomes represented? What does the controller learn if B was acknowledged but never activated? | | |
+| [ ] | P-08 | What finite storage/backpressure is needed while incoming writes, pending values and protected generations coexist? What happens when storage is unavailable? | | |
+| [ ] | P-09 | What are default active settings, bypass behavior and generation lifecycle after FPGA/controller reset or reconnect? | | |
+
+### 6. UART transport and command contract
+
+An leads transport proposals; both review integration. Record answers in [protocol](protocol.md) and ownership assignments in [ownership](ownership.md).
+
+| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | U-01 | Are PC USB-UART and ESP32 UART simultaneous endpoints, or is one selected? What selects/arbitrates them and who may change settings? | | |
+| [ ] | U-02 | What baud/framing, asynchronous-input handling and baud-error budget apply to the selected clocks? | | |
+| [ ] | U-03 | What packet delimiter/length, maximum payload, byte order, message types and versioning are used? What are the exact corruption-check algorithm and covered bytes? | | |
+| [ ] | U-04 | What are parser timeout, malformed/truncated-input handling, resynchronization and rejection behavior? Can any partial command change active settings? | | |
+| [ ] | U-05 | What do sequence identifiers identify, and how are retries, duplicate writes/commits and lost acknowledgements handled? | | |
+| [ ] | U-06 | How do sequence/generation wrap and reset/reconnect avoid stale acknowledgements or duplicate activation? | | |
+| [ ] | U-07 | How do replies and unsolicited telemetry share TX without starving replies or blocking audio? What exact packets/replies demonstrate the contract? | | |
+
+### 7. Parameter meaning and numeric boundary
+
+Record numeric semantics in [numeric design](numerics.md) and serialized fields in [protocol](protocol.md). Do not freeze a register map before these meanings are agreed.
+
+| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | N-01 | Does the controller send user units or quantized coefficients? Where are coefficients computed and which reference algorithm/version defines them? | | |
+| [ ] | N-02 | What are field units, ranges, widths, signedness, coefficient order and feedback-sign convention? Which details are necessary for the first increment? | | |
+| [ ] | N-03 | Who validates range, quantized stability and overload/headroom? What happens on rejection, and how will controller/model values be compared? | | |
+
+### 8. Telemetry and audio independence
+
+Record system guarantees here and wire representation in [protocol](protocol.md).
+
+| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | T-01 | What does one coherent snapshot contain, over what interval, and in what units? Which fields are needed for the first increment? | | |
+| [ ] | T-02 | Where is the snapshot taken, where does it cross domains, and who owns capture, transfer and serialization? | | |
+| [ ] | T-03 | What refresh/rate limits and drop/coalescing policy apply? How are stale values and congestion exposed without stalling audio? | | |
+| [ ] | T-04 | How is controller disconnection/reconnection handled while audio continues? What additional display behavior can be deferred? | | |
+
+### 9. Later DSP questions: resolve or explicitly defer
+
+Record model/representation decisions in [numeric design](numerics.md) and acceptance criteria in [verification](verification.md). These are not permission to add DSP to the first milestone.
+
+| Done | ID | Question to answer | Answer / deferral, dependency and revisit point | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | D-04 | What DSP resource-sharing/pipeline structure will be evaluated, and what model/timing evidence is needed before choosing it? | | |
+| [ ] | D-05 | What sample, coefficient, state and accumulator formats, rounding and saturation rules meet stability and headroom needs? | | |
+| [ ] | D-06 | What linked-compressor envelope/gain behavior and parameter units are selected? How are left/right gain equality and state verified? | | |
+| [ ] | D-07 | What happens to EQ/compressor state during preset changes or bypass transitions? What click/transient acceptance criteria and evidence are needed? | | |
+| [ ] | D-08 | What response/latency/overload criteria apply to each modeled processing increment, and which configuration defines the default chain? | | |
+
+### 10. Ownership, integration and planning exit
+
+Record assignments in [ownership](ownership.md), dependencies in [roadmap](roadmap.md) and acceptance in [verification](verification.md).
+
+| Done | ID | Question to answer | Answer / evidence or blocker | Owner / reviewer |
+| --- | --- | --- | --- | --- |
+| [ ] | I-01 | Who owns parameter CDC/publication, audio-side activation and coherent telemetry crossing? Who reviews each interface? | | |
+| [ ] | I-02 | Who owns the first top-level integration and which independently testable blocks must each collaborator deliver? | | |
+| [ ] | I-03 | Which normal/fault walkthroughs establish readiness: framing, deadline miss, D-01/D-02/D-03, incomplete C, lost ACK, duplicate commit, resets and clock restart? | | |
+| [ ] | I-04 | Which required diagrams/contracts and executable tests belong to the next increment? Who provides reproducible build/programming commands and records evidence? | | |
+| [ ] | I-05 | Which remaining questions block the first increment, which have bounded experiments, and which are explicitly deferred with an owner and revisit point? | | |
+| [ ] | I-06 | Does the roadmap need re-estimation after tonight's scope and hardware/clock findings? What is each person's next task? | | |
+| [ ] | I-07 | Who reconciles this planning branch with An's merged kickoff and corrects its CI formatting errors? See [integration follow-up](development.md#integration-follow-up) | | |
+| [ ] | I-08 | Does the ownership wording "stereo FIFOs" describe only an area of responsibility, or a selected mechanism? Reconcile it with the still-open topology without silently choosing hardware | | |
+
+Planning exit for the first increment: both can explain its audio/control boundary; critical hardware/clock evidence is available or explicitly blocked; relevant interfaces have reviewed ownership, timing/reset/fault contracts; D-01/D-02/D-03 have a credible proposed enforcement and acceptance scenarios; and remaining work has explicit owners/dependencies. Marking this worksheet complete is not evidence of working audio, synthesis, timing closure or hardware validation.

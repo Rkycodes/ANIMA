@@ -1,0 +1,10 @@
+flowchart TD
+  subgraph POLICY["D-03: Robel and An agreed; not implemented"]
+    RX["Incoming preset writes"] --> STAGE["Staging / shadow: assemble and validate"]
+    STAGE --> PUB["Atomically publish complete eligible snapshot"]
+    PUB --> PENDING["Pending: latest wins; C can supersede B"]
+    PENDING --> ACT["Activation owner: select at eligible frame boundary"]
+    ACT --> FRAME["New stereo frame uses one protected generation"]
+    OLD["Older in-flight frames retain their original settings"]
+  end
+  OPEN["Logical roles only: banks, CDC, timing and arbitration OPEN"]
