@@ -55,7 +55,7 @@ Alternatives under discussion; none selected:
 
 Robel's scheduling intent: do not keep extending old-generation work indefinitely during a switch; frames admitted after B activates use B. Receipt/validation alone is not activation, and the activation delay remains open. Buffering waiting audio frames and pending presets is suggested, not selected: these hold different data, add finite capacity, and need separate full/overflow policies. Audio buffering adds latency; continuous audio deadlines still apply. Robel and An agreed latest-pending-wins (D-03), as reported by Robel; see the [control contract](protocol.md#pending-preset-policy). Storage and activation mechanisms remain open.
 
-Open: activation readiness/boundary, in-flight parameter retention mechanism, pending replacement/activation arbitration and acknowledgements, parameter-crossing owner and first integration owner. First hardware milestone scope and latency endpoints/limit still need agreement; the existing sub-5-ms verification target is a proposal. An's [interconnect kickoff](https://github.com/Rkycodes/ANIMA/blob/d77741fc47be789ec7ce2ae14417c2a0c8425738/docs/notes/2026-10-04-interconnect-kickoff.md) remains An Tiet's work; its questions are included in the worksheet below. Use the [architecture worksheet](#architecture-worksheet) to record answers before the next implementation increment.
+Open: activation readiness/boundary, in-flight parameter retention mechanism, pending replacement/activation arbitration and acknowledgements, parameter-crossing owner and first integration owner. First hardware milestone is stereo bypass. Latency runs from signal entry through audible playback; exact measurement setup and maximum remain open. The latency goal is 5 ms; the hard acceptance limit remains open until the measurement setup is defined. An's [interconnect kickoff](https://github.com/Rkycodes/ANIMA/blob/d77741fc47be789ec7ce2ae14417c2a0c8425738/docs/notes/2026-10-04-interconnect-kickoff.md) remains An Tiet's work; its questions are included in the worksheet below. Use the [architecture worksheet](#architecture-worksheet) to record answers before the next implementation increment.
 
 ## Clock and codec constraints
 
@@ -94,31 +94,31 @@ First implementation: RX -> paired frame transport -> TX, without gain, EQ or co
 | Stereo frame contract | Robel proposes payload/metadata, handshake, deadlines, buffering and faults; An reviews control interaction |
 | Bypass acceptance | Bit-exact digital samples, signed extremes, channel order, MSB delay/padding, no loss/duplication, bounded delay, reset/clock-loss/underflow recovery and independence from UART/telemetry load |
 
-Proposed hardware exit: measured clocks/serial format, channel identification, audible analog bypass and a 30-minute error-free run, with timing/CDC review and reproducible configuration. Digital equality and analog behavior are separate checks; none is achieved yet.
+First milestone is stereo bypass, agreed by Robel and An. Acceptance planning is in [verification](verification.md#stereo-bypass-milestone): Verilator lint/simulation, randomized stimulus/assertion checking, deterministic expected pairs and a five-minute error-free simulated-audio run. This is simulated audio time, not simulator wall time; hardware/audio measurements follow when hardware is available. The later 30-minute qualification proposal is separate; no acceptance evidence exists yet.
 
 Next teaching/design block: trace one stereo I2S frame from clock edges to paired payload and back. An can develop UART framing and shadow/commit proposals in parallel; applied-generation integration waits for the frame contract. DSP follows accepted bypass.
 
+## Before-coding data contract
+
+Robel and An require the following to be resolved for every interface/state boundary included in the implementation increment before coding. Record values in the owning architecture/protocol/numeric contract; do not invent them to satisfy this checklist. Later DSP formats may remain explicitly deferred while implementing bypass.
+
+- Payload and metadata bit widths, signedness, units/scaling, representation, packing, channel/field order and any serialization byte/bit order.
+- Intermediate/state widths and numeric conversion rules where used: extension, truncation, rounding, saturation and overflow behavior.
+- Source/destination, clock/reset ownership, complete-frame pairing and any coherent clock-domain crossing.
+- Validity, acceptance and completion events; data stability/lifetime; handshake timing; allowed backpressure and buffering limits.
+- Startup/reset values, invalid/partial data behavior, deadlines and agreed overflow/underflow/recovery semantics.
+
+Code-local FSM organization and other implementation mechanics may be designed during coding once those externally observable contracts are fixed. This gate does not select any currently unresolved value.
+
 ## Architecture worksheet
 
-Working questions for Robel and An, October 6, 2026. These are unanswered prompts, not selected designs. Fill the answer/evidence and owner/review cells together. Mark a box only after the answer has been reviewed and recorded in the authoritative document named below. For an evidence-dependent item, record a blocker and the experiment/owner needed rather than guessing.
+Working questions for Robel and An, October 6, 2026. First-milestone planning is recorded in [roadmap](roadmap.md#first-milestone---agreed) and [verification](verification.md#stereo-bypass-milestone); its completed question section has been removed. The remaining prompts are unanswered, not selected designs. Fill the answer/evidence and owner/review cells together. Mark a box only after the answer has been reviewed and recorded in the authoritative document named below. For an evidence-dependent item, record a blocker and the experiment/owner needed rather than guessing.
 
-The immediate goal is readiness for a small first implementation increment, not completion of every later DSP design. Sections 1-8 cover first-increment contracts; section 9 may be explicitly deferred until the corresponding DSP increment. Section 10 records handoff and planning-exit checks. Do not treat a deferred question as answered.
+The immediate goal is readiness for a small first implementation increment, not completion of every later DSP design. Sections 1-7 cover first-increment contracts; section 8 may be explicitly deferred until the corresponding DSP increment. Section 9 records handoff and planning-exit checks. Do not treat a deferred question as answered.
 
-Confirmed so far: stereo-safe frames and coherent preset replacement are goals; D-01/D-02 are Robel-confirmed and await An's explicit review. D-03 latest-pending-wins is agreed by both: complete valid C may supersede pending B, while incomplete/invalid C leaves B eligible. Low latency is a goal; its limit and endpoints are open. No storage mechanism, clock tree, binary map or RTL implementation is selected here.
+Confirmed so far: stereo-safe frames and coherent preset replacement are goals; D-01/D-02 are Robel-confirmed and await An's explicit review. D-03 latest-pending-wins is agreed by both: complete valid C may supersede pending B, while incomplete/invalid C leaves B eligible. Latency goal: 5 ms from signal entry to audible playback; precise measurement locations and the hard acceptance limit remain open. No storage mechanism, clock tree, binary map or RTL implementation is selected here.
 
-### 1. First milestone and acceptance
-
-Record agreed scope in [roadmap](roadmap.md) and pass criteria in [verification](verification.md).
-
-| Done | ID | Question to answer | Answer / evidence or explicit deferral | Owner / reviewer |
-| --- | --- | --- | --- | --- |
-| [ ] | M-01 | What exactly is the first milestone: stereo bypass, PC UART identity/status, parameter activation, or which subset? What is outside this increment? | | |
-| [ ] | M-02 | What observable evidence demonstrates success for each included feature? Which checks are digital and which are analog/hardware? | | |
-| [ ] | M-03 | Where does latency measurement start and end, under what configuration, and what maximum is acceptable? Is the existing proposed sub-5-ms target adopted or revised? | | |
-| [ ] | M-04 | What instruments, vectors, run duration and reproducible commands are needed? Which required equipment is available? | | |
-| [ ] | M-05 | What must be resolved before coding versus tested during implementation? What is the next small implementation task and its acceptance criterion? | | |
-
-### 2. Hardware, wiring and tools
+### 1. Hardware, wiring and tools
 
 Record physical facts in [materials](../hardware/BOM.md), pin/clock contracts here, and new manufacturer evidence in [sources](sources.md). An's kickoff is an input, not a verified board configuration.
 
@@ -131,7 +131,7 @@ Record physical facts in [materials](../hardware/BOM.md), pin/clock contracts he
 | [ ] | H-05 | What are clock/data directions, common-ground requirements and power sequencing? What happens when only one board is powered or either board resets? | | |
 | [ ] | H-06 | Which Vivado/device/IP, Python and simulator versions are available? What codec documentation or tool access remains unavailable? | | |
 
-### 3. Clocks and reset/recovery
+### 2. Clocks and reset/recovery
 
 Record selected topology and assumptions here; keep tool evidence in [results](../results/README.md). Documented ratios are not clock-feasibility evidence.
 
@@ -144,7 +144,7 @@ Record selected topology and assumptions here; keep tool evidence in [results](.
 | [ ] | C-05 | What is held safe during startup, how is reset released per domain, and what establishes codec readiness and the first complete valid frame? | | |
 | [ ] | C-06 | What happens on clock loss or either-side reset, including stopped-domain reset assertion, partial-frame invalidation, buffering flush and restart? | | |
 
-### 4. Stereo-frame contract and scheduling
+### 3. Stereo-frame contract and scheduling
 
 Record the system contract here and its checks in [verification](verification.md). Local implementation mechanics can wait for module design.
 
@@ -157,7 +157,7 @@ Record the system contract here and its checks in [verification](verification.md
 | [ ] | F-05 | Is buffering needed, of what type and justified capacity? How are occupancy, startup priming and sustained rate mismatch handled? | | |
 | [ ] | F-06 | What are observable output/recovery behaviors for missing, duplicate, malformed or late frames, overflow and underflow? Which counters expose them? | | |
 
-### 5. Parameter lifetime and activation
+### 4. Parameter lifetime and activation
 
 Record parameter transport behavior in [protocol](protocol.md), audio consumption here, and shared ownership in [ownership](ownership.md). D-03 is already selected; the questions below concern its enforcement.
 
@@ -173,7 +173,7 @@ Record parameter transport behavior in [protocol](protocol.md), audio consumptio
 | [ ] | P-08 | What finite storage/backpressure is needed while incoming writes, pending values and protected generations coexist? What happens when storage is unavailable? | | |
 | [ ] | P-09 | What are default active settings, bypass behavior and generation lifecycle after FPGA/controller reset or reconnect? | | |
 
-### 6. UART transport and command contract
+### 5. UART transport and command contract
 
 An leads transport proposals; both review integration. Record answers in [protocol](protocol.md) and ownership assignments in [ownership](ownership.md).
 
@@ -187,7 +187,7 @@ An leads transport proposals; both review integration. Record answers in [protoc
 | [ ] | U-06 | How do sequence/generation wrap and reset/reconnect avoid stale acknowledgements or duplicate activation? | | |
 | [ ] | U-07 | How do replies and unsolicited telemetry share TX without starving replies or blocking audio? What exact packets/replies demonstrate the contract? | | |
 
-### 7. Parameter meaning and numeric boundary
+### 6. Parameter meaning and numeric boundary
 
 Record numeric semantics in [numeric design](numerics.md) and serialized fields in [protocol](protocol.md). Do not freeze a register map before these meanings are agreed.
 
@@ -197,7 +197,7 @@ Record numeric semantics in [numeric design](numerics.md) and serialized fields 
 | [ ] | N-02 | What are field units, ranges, widths, signedness, coefficient order and feedback-sign convention? Which details are necessary for the first increment? | | |
 | [ ] | N-03 | Who validates range, quantized stability and overload/headroom? What happens on rejection, and how will controller/model values be compared? | | |
 
-### 8. Telemetry and audio independence
+### 7. Telemetry and audio independence
 
 Record system guarantees here and wire representation in [protocol](protocol.md).
 
@@ -208,7 +208,7 @@ Record system guarantees here and wire representation in [protocol](protocol.md)
 | [ ] | T-03 | What refresh/rate limits and drop/coalescing policy apply? How are stale values and congestion exposed without stalling audio? | | |
 | [ ] | T-04 | How is controller disconnection/reconnection handled while audio continues? What additional display behavior can be deferred? | | |
 
-### 9. Later DSP questions: resolve or explicitly defer
+### 8. Later DSP questions: resolve or explicitly defer
 
 Record model/representation decisions in [numeric design](numerics.md) and acceptance criteria in [verification](verification.md). These are not permission to add DSP to the first milestone.
 
@@ -220,7 +220,7 @@ Record model/representation decisions in [numeric design](numerics.md) and accep
 | [ ] | D-07 | What happens to EQ/compressor state during preset changes or bypass transitions? What click/transient acceptance criteria and evidence are needed? | | |
 | [ ] | D-08 | What response/latency/overload criteria apply to each modeled processing increment, and which configuration defines the default chain? | | |
 
-### 10. Ownership, integration and planning exit
+### 9. Ownership, integration and planning exit
 
 Record assignments in [ownership](ownership.md), dependencies in [roadmap](roadmap.md) and acceptance in [verification](verification.md).
 

@@ -12,6 +12,12 @@ Planning estimate: 12-14 weeks at roughly 5-7 hours per person per week. Re-esti
 | User interface | 10-11 | Meter data, VGA integration | Web interface and display layout | Demo controllable and understandable without a laptop terminal |
 | Qualification | 12-14 | Timing, CDC, response/latency | Recovery, protocol faults, reproducibility | Both reproduce release build and evidence |
 
+## First milestone - agreed
+
+First-milestone planning is agreed; implementation and acceptance evidence are still outstanding. Robel and An selected stereo bypass on October 6, 2026: I2S RX -> coherent stereo-frame transport -> I2S TX, without DSP. See [bypass acceptance planning](verification.md#stereo-bypass-milestone) for the requested Verilator/randomized/deterministic checks and five-minute simulated-audio run. Latency goal is 5 ms from signal entry to audible playback; exact test setup and hard acceptance limit remain open. An's independent UART work can proceed in parallel; its delivery is not required to claim the selected audio-bypass milestone.
+
+Before coding, resolve architecture and the [data/transfer contract](architecture.md#before-coding-data-contract), including bit widths, signedness, representation and movement/handshake rules. Code-local mechanics and FSM structure may be worked out during implementation. No RTL implementation is authorized by recording this milestone.
+
 ## Scope gates
 
 The first resume-ready demonstration is the programmable stereo EQ with real I2S audio, live control, reproducible models, and measured results. Add compression and VGA only after that path works. Defer FFT, wireless audio streaming, and custom PCBs.
