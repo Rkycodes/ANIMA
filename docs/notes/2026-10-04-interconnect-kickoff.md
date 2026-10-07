@@ -42,7 +42,9 @@ Author: An Tiet. Base commit: 3673628 (main). Status: open questions only; nothi
 
 - The RX pin is an asynchronous input, so it needs a 2-flop synchronizer. Why does one flop isn't enough?
 - Baud math, as an exercise: 100 MHz ÷ 115200 isn't an integer. Work out the error with a full-bit divider and with 16× oversampling. How much error can UART tolerate before it samples the wrong bit? (Hint: count how far the sampling point drifts by the 10th bit.)
+
 Multi-bit clock crossing: you can't put a synchronizer on each bit of a 32-bit coefficient. Why not? Look up the req/ack toggle handshake.
+
 - One TX line, two talkers: ACK replies and unsolicited telemetry share the same wire, so you need message types and an arbiter. Telemetry has to be droppable, because it can never block audio.
 
 ### Protocol
@@ -56,10 +58,13 @@ Multi-bit clock crossing: you can't put a synchronizer on each bit of a 32-bit c
 
 - Bandwidth: at 115200 baud with 8N1 framing, how many bytes per second can you send? A web slider fires events faster than that, so coalesce to the latest value on the ESP32 instead of queueing every event.
 - Wi-Fi: the ESP32 can't easily join UVA's eduroam (WPA2-Enterprise). Plan on SoftAP mode for demos, and keep credentials out of Git.
+
 Reading list
+
 - UART at the bit level: start, data, stop bits, oversampling, and a Verilog UART receiver. Nandland's UART tutorial is a good start.
 
 ### Readings
+
 - Metastability and CDC: Clifford Cummings, "Clock Domain Crossing (CDC) Design & Verification Techniques Using SystemVerilog" (SNUG 2008). Read the sections on synchronizers and multi-bit handshakes.
 - Framing: COBS vs SLIP. CRC-8 vs CRC-16/CCITT, and what "covered bytes" means.
 - Datasheets for your exact ESP32 variant: the strapping-pins table, and the UART chapter of the ESP-IDF docs.
