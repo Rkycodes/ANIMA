@@ -32,6 +32,19 @@ The FPGA owns audio processing; the ESP32 owns wireless/web controls and sends p
 
 Commit/busy behavior, snapshot transfer, generation wrap, defaults and CDC remain joint decisions. Atomic coefficient activation alone does not ensure click-free transitions; transition/state handling needs model and audio evidence.
 
+## Preset consistency requirements
+
+Robel confirmed D-01 and D-02; An's shared-interface review is pending. These specify required behavior, not an implementation or selected pipeline.
+
+| ID | Requirement |
+| --- | --- |
+| D-01 | If B arrives while L[n] is processed under A, R[n] also uses A. B may first apply to the next stereo frame at the agreed activation boundary; receipt alone does not activate it |
+| D-02 | A frame that used A in EQ must also use A in compression, even if B activates for a later frame. Retain its required parameter values until all consumers finish |
+
+[Editable frame/preset diagram](diagrams/frame-preset-consistency.mmd): frame 10 uses A throughout; frame 11 illustrates B after a permitted activation. Arrows show logical processing order, not clock cycles or simultaneous execution. Frame index and preset generation are distinct identifiers; a generation tag alone does not retain parameter values.
+
+Open: activation readiness/boundary, in-flight parameter retention mechanism, pending B/new C policy, parameter-crossing owner and first integration owner. First hardware milestone scope and latency endpoints/limit still need agreement; the existing sub-5-ms verification target is a proposal. An's seven [interconnect questions](https://github.com/Rkycodes/ANIMA/blob/262a492/docs/notes/2026-10-04-interconnect-kickoff.md) remain proposals for joint review.
+
 ## Clock and codec constraints
 
 Source IDs below resolve to exact manufacturer references in [sources](sources.md).

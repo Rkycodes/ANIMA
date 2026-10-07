@@ -1,0 +1,8 @@
+flowchart LR
+  subgraph F10["Required: stereo frame 10, preset A"]
+    X10["L10 and R10"] --> E10["EQ using A"] --> C10["Compression using A"]
+  end
+  subgraph F11["Required if B activates for frame 11"]
+    X11["L11 and R11"] --> E11["EQ using B"] --> C11["Compression using B"]
+  end
+  OPEN["Storage, scheduling and clock topology: OPEN"]
