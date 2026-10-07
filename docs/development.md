@@ -37,11 +37,6 @@ Use Verilog-2001 (.v) for synthesizable RTL. SystemVerilog (.sv) may be used for
 
 Keep main usable. Work on focused feature branches and review each other's pull requests. Include the changed behavior and validation actually performed. Add RTL checks when executable targets exist.
 
-## Dedicated checkout
-
-Recommended permanent location: C:/Users/robel/Documents/Projects/ANIMA. Create that checkout in your own terminal. To preserve unpublished setup commits, clone the current local repository into that folder, then set origin to https://github.com/Rkycodes/ANIMA.git.
-
-Once the setup branch has been published and merged, a fresh checkout elsewhere can be created with git clone. A fresh clone of GitHub before publication will contain only the existing README.
 
 ## Integration follow-up
 
