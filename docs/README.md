@@ -1,18 +1,13 @@
-# Project documents
+# Documentation
 
-- [Architecture](architecture.md)
-- [Shared source register](sources.md)
-- [Ownership and handoffs](ownership.md)
-- [Roadmap](roadmap.md)
-- [Development workflow](development.md)
-- [Control protocol contract](protocol.md)
-- [Numeric design](numerics.md)
-- [Verification plan](verification.md)
+- [Architecture](architecture.md): system contracts, assumptions and open decisions
+- [Sources](sources.md): manufacturer references
+- [Ownership](ownership.md): work split and handoffs
+- [Protocol](protocol.md): draft control contract
+- [Numeric design](numerics.md): candidate fixed-point formats and model policy
+- [Verification](verification.md): planned checks and acceptance targets
+- [Roadmap](roadmap.md): milestones
+- [Development](development.md): tools and workflow
 - [Bill of materials](../hardware/BOM.md)
-
-These describe intended behavior. Use results/ for measured evidence; never treat a target as an achieved result.
-
-## Working material
-
-- [Notes](notes/README.md): meeting notes, experiments, decisions, and open questions.
-- [Diagrams](diagrams/README.md): editable architecture, clock, signal-flow, and wiring drawings.
+- [Results](../results/README.md): measurement and release evidence
+- [Notes](notes/README.md) and [diagrams](diagrams/README.md): working material
