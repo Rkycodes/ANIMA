@@ -19,6 +19,15 @@ class PresetManager:
 
     next_generation: int = field(default=1, init=False)
 
+    def __post_init__(self):
+        default = Preset(preset_id = 'startup', 
+                         config = PresetConfig(
+                            bypass = True,
+                            input_gain_db = 0
+                        ), 
+                    )
+        self.submit(default)
+
     def submit(self, candidate: Preset):
         if candidate.status != Status.DRAFT:
             raise ValueError("Only draft presets can be submitted")
