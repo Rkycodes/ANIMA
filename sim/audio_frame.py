@@ -14,5 +14,5 @@ class AudioFrame:
     left: float
     right: float
     snapshot: PresetSnapshot
-    stage: FrameStage = FrameStage.RECIEVED
+    stage: FrameStage = FrameStage.RECEIVED
 

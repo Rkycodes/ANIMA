@@ -36,5 +36,5 @@ class Preset:
 
 @dataclass(frozen=True)
 class PresetSnapshot:
-    generation: bool
+    generation: int
     config: PresetConfig

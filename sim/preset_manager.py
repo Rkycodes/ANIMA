@@ -107,12 +107,12 @@ class PresetManager:
     def begin_frame(self, frame_id: str, left: float, right: float) -> AudioFrame:
         self.activate()
 
-        if self.active is None:
+        if self.active_snapshot is None:
             raise RuntimeError("No preset has been activated")
 
         return AudioFrame(frame_id = frame_id, left = left, right = right, snapshot = self.active_snapshot)
     
 
 
-    def end_frame(frame: AudioFrame):
+    def end_frame(self, frame: AudioFrame):
         frame.stage = FrameStage.COMPLETE
