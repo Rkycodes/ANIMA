@@ -33,3 +33,8 @@ class Preset:
     config: PresetConfig
     status: PresetStatus = PresetStatus.DRAFT
     rejection_reason: str | None = None
+
+@dataclass(frozen=True)
+class PresetSnapshot:
+    generation: bool
+    config: PresetConfig
