@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum, auto
-from preset import PresetSnapshot
+from sim.fpga_control_logic.preset import PresetSnapshot
 
 
 class FrameStage(Enum):

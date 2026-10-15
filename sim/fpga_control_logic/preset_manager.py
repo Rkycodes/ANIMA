@@ -4,9 +4,9 @@ import math
 from dataclasses import dataclass, field
 
 # custom imports
-from preset import Preset, PresetConfig, PresetSnapshot
-from preset import PresetStatus as Status
-from audio_frame import AudioFrame, FrameStage
+from sim.fpga_control_logic.preset import Preset, PresetConfig, PresetSnapshot
+from sim.fpga_control_logic.preset import PresetStatus as Status
+from sim.fpga_control_logic.audio_frame import AudioFrame, FrameStage
 
 
 @dataclass
@@ -19,6 +19,7 @@ class PresetManager:
 
     next_generation: int = field(default=1, init=False)
 
+    # dataclasses automatically call __post_init__ after initialization; initializes PresetManager with a startup preset
     def __post_init__(self):
         default = Preset(preset_id = 'startup',
                          config = PresetConfig(
@@ -107,12 +108,12 @@ class PresetManager:
     def begin_frame(self, frame_id: str, left: float, right: float) -> AudioFrame:
         self.activate()
 
-        if self.active_snapshot is None:
+        if self.active is None:
             raise RuntimeError("No preset has been activated")
 
         return AudioFrame(frame_id = frame_id, left = left, right = right, snapshot = self.active_snapshot)
 
 
 
-    def end_frame(self, frame: AudioFrame):
+    def end_frame(frame: AudioFrame):
         frame.stage = FrameStage.COMPLETE
