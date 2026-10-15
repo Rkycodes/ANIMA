@@ -1,0 +1,141 @@
+# ANIMA — Implemented & Verified
+
+Evidence baseline: October 15, 2026. Maintained by Robel Yaee and An Tiet. This document describes current repository behavior and actual checks. [Planning & Design](planning.md) owns requirements, future acceptance and open decisions. A passing model test is not audio or FPGA validation.
+
+## Contents
+
+- [Current implementation](#current-implementation)
+- [Python preset and frame model](#python-preset-and-frame-model)
+- [Reproduce current checks](#reproduce-current-checks)
+- [Checks actually performed](#checks-actually-performed)
+- [Vivado clock-configuration evidence](#vivado-clock-configuration-evidence)
+- [Tools and workflow](#tools-and-workflow)
+- [Repository map](#repository-map)
+- [Evidence still missing](#evidence-still-missing)
+
+## Current implementation
+
+| Area | What exists | Practical limit |
+| --- | --- | --- |
+| System design | Selected bypass contracts, proposals/open decisions, source register and diagrams | Requirements, not implemented audio |
+| Python control behavior | Preset lifecycle, validation, immutable snapshots, frame snapshot references and 20 tests | Software behavioral model; no fixed-point DSP or bounded FPGA storage |
+| Repository tooling | Standard-library checker and GitHub Actions repository-check job | Hosted CI does not run model tests, RTL simulation or Vivado |
+| Vivado investigation | Device/version/license query and in-memory Clocking Wizard probe | No synthesis, implementation, routed timing or audio executable |
+| Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
+| Audio RTL / firmware / host UART | Directory scaffold only | No executable audio top, bench, XDC, firmware or serial utility |
+
+Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
+
+## Python preset and frame model
+
+An Tiet's code lives in [sim/fpga_control_logic](../sim/fpga_control_logic). It is a call-driven model, not a clocked simulation.
+
+| File | Implemented behavior |
+| --- | --- |
+| [preset.py](../sim/fpga_control_logic/preset.py) | Frozen PresetConfig and PresetSnapshot; mutable wrapper with DRAFT/PENDING/ACTIVE/SUPERSEDED/REJECTED/RETIRED states |
+| [preset_manager.py](../sim/fpga_control_logic/preset_manager.py) | Validate, copy accepted fields into immutable snapshots, latest valid pending replacement, activation and frame snapshot assignment |
+| [audio_frame.py](../sim/fpga_control_logic/audio_frame.py) | AudioFrame carries ID, L/R values, snapshot reference and RECEIVED/EQ_DONE/COMPLETE label |
+| [test_preset_manager.py](../sim/fpga_control_logic/test_preset_manager.py) | 12 lifecycle/validation tests |
+| [test_frame_snapshots.py](../sim/fpga_control_logic/test_frame_snapshots.py) | 8 startup, snapshot lifetime/immutability and generation tests |
+
+Construction submits a pending startup preset (bypass true, input gain 0 dB), generation 1. It remains pending until activation; a valid user preset may supersede it. submit accepts only draft requests and validates Boolean bypass plus finite numeric input gain within **example** ±12 dB limits. Boolean gain, wrong types, NaN/infinity and out-of-range/huge integers are rejected without replacing valid pending/active values. These limits are not frozen production DSP controls.
+
+Each valid submission copies fields into a frozen snapshot and allocates an increasing Python integer generation. Replacing the caller's mutable request config after validation cannot alter that accepted snapshot. Invalid submissions do not consume generations; superseded generations may be skipped at activation. activate retires the old request, installs pending/snapshot and clears pending; with none pending it does nothing.
+
+begin_frame calls activate and gives a new frame the active snapshot reference. Frames without updates share one snapshot. Tests demonstrate frame 10 retaining A after frame 11 begins under B, including A after end_frame marks frame 10 COMPLETE. Retiring a request does not invalidate an older frame's snapshot. end_frame changes a label; it does not manage a hardware bank or execute DSP.
+
+### Model limitations
+
+Model frame IDs are strings and L/R values are Python floats, unlike the hardware contract's unsigned 32-bit ID and signed 24-bit samples. Generations are unbounded Python integers. Calls establish ordering; there is no processing clock, serial timing, frame-slot schedule, valid/ready, reset/clock-loss model, CDC or hardware reclamation.
+
+Python references retain snapshots without a finite protected-generation capacity/full policy. Request wrappers and AudioFrame objects remain mutable; this is not adversarial API isolation. Snapshot values are the accepted authority, even if a wrapper is later edited. EQ_DONE is not implemented EQ. Direct activate calls are possible; no physical frame-boundary enforcement or simultaneous replacement/activation arbitration is proven. Frozen snapshots demonstrate retention without selecting the FPGA mechanism. Production defaults, generation wrap/reconnect, parameter maps and DSP arithmetic remain [open decisions](planning.md#open-decisions).
+
+## Reproduce current checks
+
+Use Python 3.12 from the repository root:
+
+```sh
+python scripts/check_repo.py
+python -B -m unittest discover -s sim/fpga_control_logic -v
+```
+
+Windows may use py -3.12 in place of python. The explicit nested directory matters: discovery from sim alone currently finds zero tests because fpga_control_logic is not a Python package. Some inherited test docstrings still show that old command; use the command above and confirm **20 tests** rather than accepting an empty run. No extra model dependencies are required.
+
+The checker validates required files/configuration, UTF-8/text formatting, Markdown structure, local file/heading links and diagram assets. External URLs have review records in the [source register](planning.md#source-register); offline checking does not establish current remote availability. The checker is not a Mermaid renderer, behavioral test runner, RTL linter or hardware test.
+
+The workflow [.github/workflows/ci.yml](../.github/workflows/ci.yml) currently runs the repository checker on main pushes, PRs and manual dispatch with Python 3.12 and pinned actions. Model tests are separate; adding them to hosted CI remains a future tooling task.
+
+## Checks actually performed
+
+| Check / scope | Result and limits |
+| --- | --- |
+| Branch integration, October 15 | All fetched local/remote tips were ancestors of main after 36dd5d0; origin/main pushed. Existing branch names retained |
+| Repository checker, merged Python branch | Passed after incoming whitespace corrections; no model behavior change |
+| Python model regression | 20 tests passed with nested-directory command; behavioral cases only |
+| Prior planning checkpoint | Repository and supplemental local-file/heading/UTF-8 checks passed; six diagram assets checked. Timing SVG rendered with sharp and visually inspected |
+| Vivado / device | 2026.1 SW 6511674 / IP 6504888; BASIC license detected; xc7a35tcpg236-1 recognized |
+| Clock configuration | In-memory Clocking Wizard 6.0 returned settings below; no synthesis or physical clock measurement |
+| Verilator availability | WSL Ubuntu /usr/bin/verilator reported 5.032, 2025-01-01, Debian 5.032-1; version query only |
+| Mermaid rendering | Mermaid/mmdc unavailable; manually reviewed syntax and retained editable sources. No rendered-Mermaid verification claimed |
+
+Consolidation checks passed on October 15: repository formatting/local-file/heading links and diagram integrity; a valid checker fixture plus nine deliberate failure cases (broken heading/file/path, invalid UTF-8/LF, SVG, Mermaid header, metadata and missing required document); exact preservation of all 15 source-register rows. The Mermaid header check is not rendering. No five-minute audio simulation, synthesis, timing closure, board programming, analog capture or acoustic latency result exists.
+
+## Vivado clock-configuration evidence
+
+The October 15 probe used nominal 100.000 MHz input, requested 98.304 MHz output and xc7a35tcpg236-1. Temporary configuration files were outside the repository; project in memory. Returned MMCM input divider 1, feedback multiplier 7.250, output-0 divider 7.375.
+
+Arithmetic gives processing 98.3050847458 MHz, /8 MCLK 12.2881355932 MHz, /32 SCLK 3.0720338983 MHz, /2048 stereo 48000.529661 Hz, or +11.034605 ppm from 48 kHz excluding oscillator tolerance. These are calculations from configuration, not measured clocks. Source-tolerance range and first-build requirements are in [Clock architecture](planning.md#clock-architecture).
+
+### Reproduce configuration-only investigation
+
+Save the following Tcl outside the repository or in ignored scratch storage, then run Vivado batch mode with that file as its source. Use a fresh temporary directory per run; this recipe adds a process-specific name. It does not generate/synthesize a design.
+
+```tcl
+create_project -in_memory -part xc7a35tcpg236-1
+set probe_dir [file join $::env(TEMP) anima-clock-probe-[pid]]
+file mkdir $probe_dir
+create_ip -name clk_wiz -vendor xilinx.com -library ip -version 6.0 -module_name anima_clock_probe -dir $probe_dir
+set_property -dict [list CONFIG.PRIM_IN_FREQ {100.000} CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {98.304}] [get_ips anima_clock_probe]
+report_property [get_ips anima_clock_probe]
+```
+
+Installed Windows entry: C:/AMDDesignTools/2026.1/Vivado/bin/vivado.bat. Invoke with -mode batch -source followed by the saved Tcl path; run from ignored/scratch storage so logs do not become source files. Record version/options and preserve useful properties with future reports.
+
+Wizard configuration does not prove routed resources, output pads, setup/hold, jitter compliance or codec readiness. Raw estimated jitter/phase-error fields were not promoted to claims because their units were unconfirmed. No legal operating-frequency or timing-closure claim is made from this probe.
+
+## Tools and workflow
+
+Use Windows Vivado for clock investigation and eventual simulation, synthesis, implementation, timing and programming. Use Verilator for lint/regression once benches exist; Vivado Simulator directed checks complement it without duplicating the five-minute run by default. Current WSL use was a version query. If using separate Windows/WSL clones, synchronize commits and keep generated directories separate; report the same source revision for comparisons.
+
+Synthesizable RTL uses Verilog-2001 (.v); SystemVerilog (.sv) may be used for verification. Audio models and host utilities use Python. Select/pin ESP32 board/framework/version before firmware; keep credentials out of Git. Pin model dependencies when introduced.
+
+No build command is advertised for missing RTL. Add source-controlled Tcl, source lists and reviewed XDC with the first real top; generate under ignored build/. Check exact hardware rather than downloaded guesses. Use synthetic impulses, tones, sweeps, silence and seeded noise for vectors.
+
+Keep main usable, use focused PRs and report actual validation. Obtain Robel's approval before each commit boundary; new commits use his configured identity while preserving collaborator authorship. Run appropriate checks at commit boundaries rather than after every prose edit. Shared top-level wiring needs one claimed integration owner per increment.
+
+## Repository map
+
+| Path | Present purpose / state |
+| --- | --- |
+| [README.md](../README.md) | Entry point and planned system diagram |
+| [planning.md](planning.md) / this document | Design requirements versus current evidence |
+| [diagrams/](diagrams) | Five editable Mermaid sources and timing SVG |
+| [config/project.json](../config/project.json) | Planning metadata; draft baud is not a frozen protocol |
+| [rtl/](../rtl) | Empty audio/dsp/control/display/common scaffold |
+| [model/](../model) | Reserved audio reference/bit-exact models |
+| [sim/fpga_control_logic/](../sim/fpga_control_logic) | Current Python model/tests |
+| [firmware/esp32/](../firmware/esp32) | Reserved firmware area |
+| [tools/serial_host/](../tools/serial_host) | Reserved PC UART diagnostics |
+| [hardware/](../hardware) | Reserved assets; live inventory is in Planning & Design |
+| [scripts/check_repo.py](../scripts/check_repo.py) | Repository checker |
+| [scripts/vivado/](../scripts/vivado) | Reserved build tooling |
+| [results/](../results) | Reserved measured/release evidence; no audio measurements |
+| [.github/](../.github) | CI and operational issue/PR templates, retained separately |
+
+Former folder indexes, duplicate contract files and learning-note copies are folded into the two main documents. Empty scaffold areas retain .gitkeep files. Full An note history/credit is linked in [design history](planning.md#design-history-and-contribution-credit). Collaborator code/history is preserved.
+
+## Evidence still missing
+
+First audio milestone needs actual codec/JP1/electrical checks, reviewed clock/pad/reset realization and constraints, bypass RTL/benches, Verilator deterministic/random regressions including 300 seconds simulated audio, Vivado directed checks, synthesis/routed timing and physical serial/audio measurements. Analog/acoustic setup, tolerances and hard latency limit remain open; **5 ms is a goal**.
+
+No working audio, DSP, deployed browser/VGA, firmware, synthesized design or hardware acceptance is claimed. Next: [codec → clock/reset → frame contract → bypass acceptance](planning.md#ownership-and-delivery), with An's UART/shadow proposal in parallel.

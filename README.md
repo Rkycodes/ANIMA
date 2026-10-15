@@ -1,14 +1,23 @@
 # ANIMA
 
-**Artix Networked I2S Multiband Audio Processor**
+**Artix Networked I2S Multiband Audio Processor** — Robel Yaee and An Tiet.
 
-A planned stereo audio processor for the Basys 3 Artix-7 FPGA and Pmod I2S2, with ESP32 wireless controls. Target: 48 kHz, 24-bit stereo samples in 32-bit I2S slots. Wi-Fi carries control traffic only.
+A planned Basys 3 / Pmod I2S2 stereo audio processor with ESP32 wireless controls. Nominal 48 kHz, signed 24-bit samples, two 32-bit I2S slots. Wi-Fi carries controls only.
 
-**Status:** planning/scaffold plus a Python preset-lifecycle model. No audio RTL, firmware, implemented board constraints, synthesis target, RTL simulation target or hardware validation exists yet. A Vivado clock-configuration probe is recorded separately from implementation evidence. First milestone: stereo bypass without DSP.
+**Current status:** Python preset/frame behavioral model and repository checks; no audio RTL, firmware, synthesis target, routed timing or hardware audio validation. First audio milestone: stereo bypass without DSP. Basys 3 D.1 is on hand; the intended Pmod has not yet been purchased.
+
+## Read the project
+
+| Document | What belongs there |
+| --- | --- |
+| [Planning & Design](docs/planning.md) | Contracts, hardware, clocks, DSP/control proposals, acceptance requirements, ownership, open decisions and sources |
+| [Implemented & Verified](docs/implemented.md) | Current code, checks actually run, tool evidence, reproducible commands and limitations |
+
+The [source register](docs/planning.md#source-register) retains stable source IDs. Selected requirements are distinct from proposals and verified behavior.
 
 ## Planned system
 
-Solid arrows carry audio; dashed arrows carry control or observations. The internal audio/DSP direction is one domain with custom paired valid/ready handoffs; see architecture for selected buffering, timing and remaining physical evidence gates.
+This describes the planned final system, not implemented audio. Solid arrows carry audio; dashed arrows carry controls or observations. The first milestone implements only RX → coherent stereo frames → TX.
 
 ```mermaid
 flowchart LR
@@ -39,34 +48,13 @@ flowchart LR
   UART -.-> ESP
 ```
 
-## Repository layout
+## Run current checks
 
-| Path | Purpose |
-| --- | --- |
-| [rtl/](rtl/README.md) | Verilog audio, DSP, control and display blocks |
-| [model/](model/README.md) | Floating-point and bit-exact reference models |
-| [sim/](sim/README.md) | Testbenches, scoreboards and vectors |
-| [firmware/esp32/](firmware/esp32/README.md) | ESP32 controls and web interface |
-| [tools/serial_host/](tools/serial_host/README.md) | PC UART diagnostics |
-| [hardware/](hardware/BOM.md) | Bill of materials |
-| [docs/](docs/README.md) | System contracts, ownership and references |
-| [scripts/](scripts/README.md) | Repository checks and build tooling |
-| [results/](results/README.md) | Measurement and release evidence |
-
-## Available checks
-
-With Python 3.12:
+With Python 3.12, from the repository root:
 
 ```sh
 python scripts/check_repo.py
+python -B -m unittest discover -s sim/fpga_control_logic -v
 ```
 
-This checks documentation links, encoding, formatting and scaffold integrity; it does not validate audio or FPGA timing. The existing Python preset model has a separate unit-test command:
-
-```sh
-python -m unittest discover -s sim -v
-```
-
-Those tests do not validate stereo bypass, DSP RTL, codec timing or hardware. No executable RTL simulation target exists yet.
-
-Start with [architecture](docs/architecture.md), [ownership](docs/ownership.md), [development](docs/development.md) and [sources](docs/sources.md). The [documentation index](docs/README.md) links the remaining contracts and plans.
+These check repository integrity and the Python behavioral model, not audio, FPGA timing or hardware. See [reproduction and evidence](docs/implemented.md#reproduce-current-checks).

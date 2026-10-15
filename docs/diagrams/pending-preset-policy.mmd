@@ -1,5 +1,5 @@
 flowchart TD
-  subgraph POLICY["D-03: Robel and An agreed; not implemented"]
+  subgraph POLICY["D-03: agreed hardware policy; Python behavioral model only"]
     RX["Incoming preset writes"] --> STAGE["Staging / shadow: assemble and validate"]
     STAGE --> PUB["Atomically publish complete eligible snapshot"]
     PUB --> PENDING["Pending: latest wins; C can supersede B"]
