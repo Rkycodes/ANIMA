@@ -1,6 +1,7 @@
 # Documentation
 
 - [Architecture](architecture.md): system contracts, assumptions and open decisions
+- [Architecture worksheet](architecture.md#architecture-worksheet): fill-in questions for Robel and An
 - [Sources](sources.md): manufacturer references
 - [Ownership](ownership.md): work split and handoffs
 - [Protocol](protocol.md): draft control contract

@@ -1,0 +1,8 @@
+flowchart LR
+    FPGA["FPGA audio clock generation<br/>Selected direction by Robel; feasibility pending"]
+    ADC["ADC: slave mode"]
+    DAC["DAC: external serial clocks"]
+    FPGA -->|"Coordinated MCLK, SCLK, LRCK"| ADC
+    FPGA -->|"Coordinated MCLK, SCLK, LRCK"| DAC
+    OPEN["Target: evaluated MMCM / integer ratios;<br/>OPEN: routed I/O timing, actual module,<br/>hardware readiness and physical constraints"]
+    FPGA -.- OPEN

@@ -1,0 +1,6 @@
+flowchart LR
+  subgraph CANDIDATE["Alternative only: retain snapshots; mechanism not selected"]
+    A["Snapshot A: still needed"] -.-> F10["Frame 10 compression uses A"]
+    B["Snapshot B: still needed"] -.-> F11["Frame 11 processing uses B"]
+    C["Preset C arrives"] -.-> P["Pending: latest wins; storage and activation cutoff OPEN"]
+  end

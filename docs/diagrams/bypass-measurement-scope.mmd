@@ -1,0 +1,6 @@
+flowchart LR
+  IN["Signal enters system: exact point OPEN"] --> ADC["ADC"]
+  ADC --> FPGA["FPGA stereo bypass"] --> DAC["DAC"]
+  DAC --> PLAY["Amplifier / speaker playback"] --> OUT["Audible output: measurement location OPEN"]
+  IN -.-> SCOPE["Agreed latency scope: entry to audible playback; goal 5 ms; hard limit OPEN"]
+  OUT -.-> SCOPE
