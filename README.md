@@ -4,11 +4,11 @@
 
 A planned stereo audio processor for the Basys 3 Artix-7 FPGA and Pmod I2S2, with ESP32 wireless controls. Target: 48 kHz, 24-bit stereo samples in 32-bit I2S slots. Wi-Fi carries control traffic only.
 
-**Status:** scaffold only. No audio RTL, firmware, board constraints, synthesis target, simulation target, or hardware validation exists yet. First milestone: stereo bypass without DSP.
+**Status:** planning/scaffold plus a Python preset-lifecycle model. No audio RTL, firmware, implemented board constraints, synthesis target, RTL simulation target or hardware validation exists yet. A Vivado clock-configuration probe is recorded separately from implementation evidence. First milestone: stereo bypass without DSP.
 
 ## Planned system
 
-Solid arrows carry audio; dashed arrows carry control or observations. Frame handoffs do not select buffering or clock topology.
+Solid arrows carry audio; dashed arrows carry control or observations. The internal audio/DSP direction is one domain with custom paired valid/ready handoffs; see architecture for selected buffering, timing and remaining physical evidence gates.
 
 ```mermaid
 flowchart LR
@@ -61,6 +61,12 @@ With Python 3.12:
 python scripts/check_repo.py
 ```
 
-This checks documentation links, encoding, formatting and scaffold integrity; it does not validate audio or FPGA timing. No executable simulation target exists yet.
+This checks documentation links, encoding, formatting and scaffold integrity; it does not validate audio or FPGA timing. The existing Python preset model has a separate unit-test command:
+
+```sh
+python -m unittest discover -s sim -v
+```
+
+Those tests do not validate stereo bypass, DSP RTL, codec timing or hardware. No executable RTL simulation target exists yet.
 
 Start with [architecture](docs/architecture.md), [ownership](docs/ownership.md), [development](docs/development.md) and [sources](docs/sources.md). The [documentation index](docs/README.md) links the remaining contracts and plans.

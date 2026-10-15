@@ -3,10 +3,10 @@
 ## Tools
 
 - Git and GitHub for source, issues, PR review, and CI.
-- Vivado on Windows for Basys 3 synthesis, implementation, Clock Wizard, programming, and timing reports. Record the installed release when first building.
+- Vivado on Windows for Basys 3 synthesis, implementation, Clock Wizard, programming, and timing reports. On October 15, 2026, Vivado 2026.1 build 6511674, BASIC license access and xc7a35tcpg236-1 support were confirmed. The configuration-only clock probe is recorded in architecture; it is not synthesis or hardware validation. Use Vivado Simulator for directed waveform/debug checks once RTL/benches exist, alongside Verilator lint/regression. Do not duplicate the five-minute regression in both simulators by default.
 - VS Code or another editor.
 - Python 3.12 for repository checks and reference models. Add pinned model dependencies when the model exists.
-- WSL2 Ubuntu with Verilator for RTL simulation once benches exist. Confirm simulator versions when adding CI.
+- WSL Ubuntu provides /usr/bin/verilator, reported as Verilator 5.032 (2025-01-01, Debian 5.032-1) on October 15, 2026. No audio bench exists or was run. Record source lists/options when adding RTL simulation and CI.
 - ESP-IDF or PlatformIO for ESP32 firmware; An selects the framework after identifying the exact board. Commit its version and target configuration.
 - Serial terminal and, ideally, a logic analyzer for I2S/UART bring-up.
 
@@ -40,10 +40,6 @@ Keep main usable. Work on focused feature branches and review each other's pull 
 
 ## Integration follow-up
 
-As of October 6, 2026, An Tiet's [interconnect PR #2](https://github.com/Rkycodes/ANIMA/pull/2) merged into remote main as c0ec042. The merge succeeded; the [repository-check job](https://github.com/Rkycodes/ANIMA/actions/runs/37560901435/job/112597686363) failed on formatting in docs/notes/2026-10-04-interconnect-kickoff.md:
+Remote main includes An Tiet's interconnect notes and gameplan, preserved with authorship, and the Python preset-lifecycle model from [PR #3](https://github.com/Rkycodes/ANIMA/pull/3). Commit 33d65ee repaired the earlier kickoff Markdown formatting; the historical CI failure is not a current unresolved formatting task. This planning checkpoint incorporates that main history without altering An's model. Later commits on python-model remain separate unless explicitly integrated.
 
-- Missing final newline.
-- Missing blank lines before lists at reported lines 46, 60 and 63.
-- Missing blank line after the heading at reported line 62.
-
-Correct formatting while preserving An's content and attribution. The Node.js deprecation warning was not the failing check. This docs/planning increment is based on 4d8f4db and has not incorporated c0ec042 or modified An's kickoff. Reconcile the branches and repair formatting in a separately authorized integration step; do not overwrite either collaborator's work. A passing check on this branch does not establish that remote main's formatting issue is repaired.
+The audio integration task remains unassigned at Robel's request. Claim it before concurrent top-level edits. This checkpoint defines intended bypass behavior and verification requirements; it does not authorize RTL/firmware implementation or claim passing audio tests.

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1330" height="710" viewBox="0 0 1330 710" role="img" aria-labelledby="title desc">
+<title id="title">ANIMA bypass edge timing budget</title>
+<desc id="desc">Ideal aligned RX and TX study, with final right sample capture at zero, left LRCK transition at 7.5 bit periods, and next left MSB launch at 8.5. The selected deadline includes eligible acceptance on the left LRCK scheduling edge. No timing closure is implied.</desc>
+<rect width="1330" height="710" fill="#101827"/>
+<style>text{font-family:Segoe UI,Arial,sans-serif;fill:#e5edf7;font-size:16px}.small{font-size:14px}.muted{fill:#a8b9ce}.wave{fill:none;stroke:#74c7f5;stroke-width:2.5}</style>
+<text x="36" y="40" class="" text-anchor="start">ANIMA: final right-bit capture → next left MSB</text>
+<text x="36" y="68" class="small muted" text-anchor="start">Selected next-slot timing target; ideal aligned RX/TX, 50% SCLK. Clock feasibility and timing evidence pending.</text>
+<line x1="230" y1="115" x2="230" y2="435" stroke="#61738c" stroke-width="1.5" stroke-dasharray="5 5"/>
+<text x="230" y="105" class="small" text-anchor="middle">0 T</text>
+<line x1="995.0" y1="115" x2="995.0" y2="435" stroke="#61738c" stroke-width="1.5" stroke-dasharray="5 5"/>
+<text x="995.0" y="105" class="small" text-anchor="middle">7.5 T</text>
+<line x1="1097.0" y1="115" x2="1097.0" y2="435" stroke="#61738c" stroke-width="1.5" stroke-dasharray="5 5"/>
+<text x="1097.0" y="105" class="small" text-anchor="middle">8.5 T</text>
+<line x1="1148" y1="115" x2="1148" y2="435" stroke="#61738c" stroke-width="1.5" stroke-dasharray="5 5"/>
+<text x="1148" y="105" class="small" text-anchor="middle">9 T</text>
+<text x="36" y="165" class="" text-anchor="start">SCLK</text>
+<polyline class="wave" points="163.7,155 179.0,155 179.0,190 230.0,190 230.0,155 281.0,155 281.0,190 332.0,190 332.0,155 383.0,155 383.0,190 434.0,190 434.0,155 485.0,155 485.0,190 536.0,190 536.0,155 587.0,155 587.0,190 638.0,190 638.0,155 689.0,155 689.0,190 740.0,190 740.0,155 791.0,155 791.0,190 842.0,190 842.0,155 893.0,155 893.0,190 944.0,190 944.0,155 995.0,155 995.0,190 1046.0,190 1046.0,155 1097.0,155 1097.0,190 1148.0,190 1148.0,155 1188.8000000000002,155"/>
+<text x="36" y="240" class="" text-anchor="start">LRCK</text>
+<path class="wave" d="M 163.7 225 H 995.0 V 255 H 1188.8000000000002"/>
+<text x="536" y="215" class="small" text-anchor="middle">HIGH: right</text>
+<text x="1107.1999999999998" y="245" class="small" text-anchor="middle">LOW: left</text>
+<text x="36" y="315" class="" text-anchor="start">ADC data</text>
+<rect x="179.0" y="290" width="102.0" height="38" rx="4" fill="#355c87"/>
+<text x="230.0" y="315" class="small" text-anchor="middle">R[n] LSB</text>
+<rect x="281.0" y="290" width="714.0" height="38" rx="4" fill="#293b51"/>
+<text x="638.0" y="315" class="small" text-anchor="middle">7 non-payload periods</text>
+<rect x="995.0" y="290" width="102.0" height="38" rx="4" fill="#293b51"/>
+<text x="1046.0" y="315" class="small" text-anchor="middle">tail</text>
+<rect x="1097.0" y="290" width="91.80000000000018" height="38" rx="4" fill="#355c87"/>
+<text x="1142.9" y="315" class="small" text-anchor="middle">L[n+1] MSB</text>
+<text x="36" y="375" class="" text-anchor="start">FPGA TX</text>
+<rect x="179.0" y="350" width="102.0" height="38" rx="4" fill="#355c87"/>
+<text x="230.0" y="375" class="small" text-anchor="middle">prior R LSB</text>
+<rect x="281.0" y="350" width="714.0" height="38" rx="4" fill="#293b51"/>
+<text x="638.0" y="375" class="small" text-anchor="middle">7 zeros</text>
+<rect x="995.0" y="350" width="102.0" height="38" rx="4" fill="#293b51"/>
+<text x="1046.0" y="375" class="small" text-anchor="middle">zero 8</text>
+<rect x="1097.0" y="350" width="91.80000000000018" height="38" rx="4" fill="#355c87"/>
+<text x="1142.9" y="375" class="small" text-anchor="middle">L[n] MSB*</text>
+<line x1="230" y1="450" x2="995.0" y2="450" stroke="#89dfb0" stroke-width="1.5"/>
+<line x1="230" y1="445" x2="230" y2="455" stroke="#89dfb0" stroke-width="1.5"/>
+<line x1="995.0" y1="445" x2="995.0" y2="455" stroke="#89dfb0" stroke-width="1.5"/>
+<text x="612.5" y="440" class="small" text-anchor="middle">To inclusive TX selection deadline: 7.5 T = 2.441379 us</text>
+<line x1="230" y1="490" x2="1097.0" y2="490" stroke="#89dfb0" stroke-width="1.5"/>
+<line x1="230" y1="485" x2="230" y2="495" stroke="#89dfb0" stroke-width="1.5"/>
+<line x1="1097.0" y1="485" x2="1097.0" y2="495" stroke="#89dfb0" stroke-width="1.5"/>
+<text x="663.5" y="480" class="small" text-anchor="middle">To left MSB launch: 8.5 T = 2.766897 us</text>
+<text x="36" y="550" class="small" text-anchor="start">t = 0: R[n] LSB captured on rising SCLK; pair can then be assembled.</text>
+<text x="36" y="576" class="small" text-anchor="start">* TX selects expected frame n at the next left boundary; acceptance on that edge counts. Otherwise send silence.</text>
+<text x="36" y="602" class="small muted" text-anchor="start">T = 325.517 ns for the first-build target (nominal 100 MHz reference). One internal audio/DSP domain with enables; no frame CDC planned.</text>
+<text x="36" y="630" class="small" text-anchor="start">98.305085 MHz first-build target: 32 cycles/T; 240 cycles to selection, 272 to MSB launch, 288 to DAC capture.</text>
+<text x="36" y="658" class="small muted" text-anchor="start">Calculated target budgets only; oscillator tolerance not shown. Assembly, handoff, stale draining, TX preparation and margin consume available time.</text>
+<text x="36" y="686" class="small muted" text-anchor="start">No achieved frequency, clock phase, timing closure or hardware validation is claimed.</text>
+</svg>

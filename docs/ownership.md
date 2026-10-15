@@ -2,7 +2,7 @@
 
 | Area | Primary owner | Review / handoff |
 | --- | --- | --- |
-| Audio clocks, resets, I2S RX/TX, stereo FIFOs | Robel | An reviews pin and interface contracts |
+| Audio clocks, resets, I2S RX/TX, coherent frame transport and buffers | Robel | An reviews pin and interface contracts |
 | Gain, biquads, compression, saturation | Robel | An reviews control integration |
 | Python reference and bit-exact audio models | Robel | Shared test-vector review |
 | ESP32 firmware, Wi-Fi and web controls | An | Robel checks parameter meanings |
@@ -21,3 +21,5 @@
 5. Each owner supplies tests and documentation for their blocks. Integration does not transfer all debugging to Robel.
 
 Keep shared interfaces small. Do not have both people editing the same top-level wiring concurrently; choose one integration owner per PR.
+
+First bypass top-level integration remains unassigned at Robel's request on October 15, 2026; whichever collaborator takes the task must claim it before concurrent top-level edits and arrange review. Block ownership above remains unchanged.
