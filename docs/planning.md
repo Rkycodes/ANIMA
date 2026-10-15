@@ -1,0 +1,403 @@
+# ANIMA — Planning & Design
+
+Design baseline: October 15, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
+
+## Contents
+
+- [System and scope](#system-and-scope)
+- [Hardware and connections](#hardware-and-connections)
+- [Clock architecture](#clock-architecture)
+- [Stereo bypass contract](#stereo-bypass-contract)
+- [Reset and recovery](#reset-and-recovery)
+- [Diagnostics and user interfaces](#diagnostics-and-user-interfaces)
+- [DSP and numeric design](#dsp-and-numeric-design)
+- [Control and preset publication](#control-and-preset-publication)
+- [Acceptance plan](#acceptance-plan)
+- [Ownership and delivery](#ownership-and-delivery)
+- [Open decisions](#open-decisions)
+- [Source register](#source-register)
+- [Design history and contribution credit](#design-history-and-contribution-credit)
+
+## System and scope
+
+The [planned system diagram](../README.md#planned-system) separates audio, control and observations. Audio order: stereo line source → Pmod I2S2 ADC → I2S RX → coherent stereo frame → input gain → five biquads per channel → stereo-linked compressor → output gain/saturation → coherent stereo frame → I2S TX → DAC → powered speakers/amplifier.
+
+The FPGA executes audio. The ESP32/browser requests changes over UART; Wi-Fi carries no audio. Browser controls and compact read-only VGA status are both required in the finished system. VGA follows bypass/EQ; it is not optional. FFT is a stretch goal; wireless audio streaming and custom PCBs are deferred.
+
+**First milestone, agreed October 6:** stereo bypass, RX → paired frame transport → TX, with no DSP. Planning is agreed; implementation/acceptance are outstanding. An's independent UART work is not a dependency for the audio-bypass milestone. Recording a design does not authorize unrequested RTL/firmware implementation.
+
+Before coding each increment, resolve its architecture, high-level interfaces, ownership, widths, signedness, units/scaling, packing/order, numeric conversions, data lifetime, handshakes, clock/reset ownership, deadlines and faults. Code-local FSM/register/mux organization can be chosen during coding. Later DSP/control formats may remain explicitly deferred while implementing bypass.
+
+## Hardware and connections
+
+### Inventory and applicability
+
+| Item | Quantity | Status / use |
+| --- | --- | --- |
+| Digilent Basys 3 | 1 | D.1 reported by Robel; received October 14, reported October 15. D.1 schematic SRC-008; older rev. C manual SRC-001 needs applicability review |
+| Intended Digilent Pmod I2S2, 410-379 | 1 | Not yet purchased, reconfirmed October 15. [Candidate Amazon listing B0CLLXNPTG](https://www.amazon.com/dp/B0CLLXNPTG) could not be retrieved; manufacturer/model, ADC/DAC, revision and pinout unverified |
+| ESP32 DevKit V1 / ESP32-WROOM-32 | 1 | Designation/module confirmed October 8. Dev-board vendor/revision, pin count, USB-serial device, schematic and firmware framework/version open |
+| Stereo 3.5 mm TRS male-to-male cables | 2 | Separate input/output cables; each carries both channels |
+| Stereo line source | 1 | Computer/player/phone with suitable output or dongle |
+| Powered speakers or amplifier | 1 | Suitable line input; verify levels/loading |
+| USB data/power/programming cables | 1 per board | Match actual connectors |
+| 3.3 V-compatible jumpers / Pmod extension | As needed | Verify orientation, grounding and power sequencing |
+| Development computer | 1 per person preferred | Vivado, Python, simulator and selected ESP32 tools |
+
+Multimeter, suitable logic analyzer, oscilloscope and audio capture equipment improve diagnosis. Record available instruments/limits before setting hardware acceptance tolerances.
+
+### Reserved board connections
+
+Selected: reserve the full 12-pin JA for audio. Mapping uses **SRC-008 sheet 6** and **SRC-002 J1**, not just the rev. B master XDC. This is a connection plan, not implemented constraints or electrical validation.
+
+| Function | Board connection | FPGA package pin | FPGA direction |
+| --- | --- | --- | --- |
+| 100 MHz reference | CLK100MHZ | W5 | Input |
+| DAC MCLK | JA1 / Pmod J1.1 | J1 | Output |
+| DAC LRCK | JA2 / Pmod J1.2 | L2 | Output |
+| DAC SCLK | JA3 / Pmod J1.3 | J2 | Output |
+| DAC serial data | JA4 / Pmod J1.4 | G2 | Output |
+| ADC MCLK | JA7 / Pmod J1.7 | H1 | Output |
+| ADC LRCK | JA8 / Pmod J1.8 | K2 | Output |
+| ADC SCLK | JA9 / Pmod J1.9 | H2 | Output |
+| ADC serial data | JA10 / Pmod J1.10 | G3 | Input |
+| Audio-reset request | Center button | U18 | Input |
+| Diagnostic clear | Down button | U17 | Input |
+| Sticky audio fault | LED0 | U16 | Output |
+
+JA positions 5/11 are ground; 6/12 are 3.3 V. Check actual module, voltage and orientation before connecting. ADC slave mode uses JP1's ground-side SDOUT pulldown per SRC-002; physical jumper orientation remains an arrival check. Coordinated clocks go to separate ADC/DAC pins; do not externally tie FPGA outputs together. JB/JC and UART pins are unallocated.
+
+ESP32 integration must address safe GPIOs (straps, flash/PSRAM and boot output), common ground, voltage compatibility and back-powering with one board off. Third-party pinouts do not verify this exact board's wiring. No live wiring/programming is established here.
+
+## Clock architecture
+
+### Manufacturer constraints
+
+Source IDs resolve to revisions and exact locators in the [source register](#source-register).
+
+| Source | Supported requirement / ANIMA implication |
+| --- | --- |
+| SRC-001 / SRC-008 | Basys reference 100 MHz at W5, clock-capable input; D.1 schematic names IC9 DSC1033CC1-100.0000T. Clock resource/routing rules still apply |
+| SRC-002 | Separate ADC/DAC MCLK/LRCK/SCLK; JP1 selects ADC mode through SDOUT. Do not drive ADC clock outputs if configured as master |
+| SRC-004 | CS5343 single-speed slave, 4–54 kHz: MCLK/Fs 256/384/512/768; SCLK/Fs 64 at 256/512, 48 or 64 at 384/768. At 48 kHz master mode supports those MCLK ratios with 64 SCLK/frame. 24-bit I2S, one-bit MSB delay; mode sampled at startup |
+| SRC-005 | CS4344 at 48 kHz supports MCLK/Fs 256/384/512/768/1024. MCLK/LRCK/SCLK synchronous, no prescribed mutual phase. External SCLK supports 24-bit I2S on rising edges. Internal SCLK at 256/512/1024 is 32 Fs and only 16-bit I2S. External detection needs 16 rising edges in an LRCK phase; two frames without edges revert to internal mode |
+| SRC-006 / SRC-007 | Review MMCM/PLL limits/constraints. Requested and actual Wizard frequencies can differ; fractional feedback/CLKOUT0 dividers use 1/8 increments. Qualify LOCKED and reset/reacquire after lock loss |
+| SRC-015 | Schematic oscillator code S=1 specifies ±50 ppm, temperature code C. Source tolerance for named part, not fitted-part or frequency measurement |
+
+Common ADC/DAC ratios at nominal 48 kHz: 256/384/512/768 Fs, arithmetically 12.288/18.432/24.576/36.864 MHz. A 64 Fs SCLK is 3.072 MHz. Supported ratios do not prove FPGA generation/timing closure. Consulted ADC datasheet is marked Draft; Pmod manual remains unavailable.
+
+### Selected topology and first-build target
+
+Robel selected FPGA-generated coordinated MCLK/SCLK/LRCK, ADC slave and DAC external-SCLK mode. RX/frame transport/DSP/TX use **one internal processing domain with enables**. External serial clocks still exist. Board-reference clock supervision is separate; UART/control/VGA domains remain open. [Editable clock-ownership diagram](diagrams/audio-clock-ownership.mmd).
+
+A common domain simplifies handoffs and avoids internal audio-frame CDC. A separate DSP domain could decouple processing frequency but needs coherent crossings, reset/flush coordination and buffering analysis; it is not selected. Related clocks need timing analysis and are not automatically asynchronous. Async FIFO provides safe CDC, not correction of sustained rate mismatch. Independently synchronizing sample/coefficient bits does not preserve words. A later educational async-FIFO demonstration is only a proposal with endpoints/acceptance open.
+
+Robel approved the October 15 probe as the **first bypass-build target**, subject to implementation checks:
+
+| Quantity | Target / arithmetic from Wizard settings |
+| --- | --- |
+| Reference | Nominal 100.000 MHz |
+| MMCM input divider / multiplier / CLKOUT0 divider | 1 / 7.250 / 7.375 |
+| Processing | Approximately 98.3050847458 MHz |
+| MCLK = processing / 8 | Approximately 12.2881355932 MHz, 256 Fs |
+| SCLK = processing / 32 | Approximately 3.0720338983 MHz, 64 Fs |
+| Stereo rate = processing / 2048 | Approximately 48000.529661 Hz |
+| Error from 48 kHz | +11.034605 ppm, excluding oscillator tolerance |
+| With schematic part's ±50 ppm | Approximately 47998.130–48002.930 Hz, −38.966 to +61.035 ppm from 48 kHz |
+
+These are calculations/configuration, not measured frequency, jitter or routed timing. Earlier 98.304 MHz is the nominal arithmetic target; evaluated output is approximate. Actual parts, PFD/VCO/divider legality for the instantiated design, resources/routing, phase/duty/jitter requirements, external-clock realization and setup/hold remain acceptance gates. Do not substitute unchecked fabric clocks or alternating bit periods. Tool/probe reproduction is in [Implemented & Verified](implemented.md#vivado-clock-configuration-evidence).
+
+## Stereo bypass contract
+
+### Serial format and paired data
+
+Selected nominal 48 kHz, signed two's-complement 24-bit samples, MSB first, two 32-bit slots / 64 SCLK periods per frame. LRCK low left, high right. Transfer only complete **L[n]/R[n]** from one input interval, never partial/mixed-index pairs.
+
+TX changes data on SCLK falling edges; RX captures rising. Change LRCK on a falling edge, launch new channel MSB on the next falling edge, capture it on the following rising edge. Preserve the one-bit I2S lead (SRC-012 §§3.1–3.2); identity follows the delayed MSB, not the bit present at LRCK transition. Opposite edges give nominal half-cycle separation, not guaranteed setup/hold: include converter delays, board skew, duty cycle and routed constraints.
+
+After each 24-bit LSB, TX sends zeros until next MSB; no sign-extension padding. Of 32 periods between LRCK transitions, first is the preceding word's tail, then 24 new payload bits and seven trailing periods. The eighth post-LSB zero is across the next LRCK transition before the following MSB. RX excludes padding. See SRC-012 §6.1 / Figure 5 and codec timing sources.
+
+### Custom valid/ready interface
+
+No AXI interface is selected. Each transaction carries these fields together:
+
+| Field | Width / representation | Meaning |
+| --- | --- | --- |
+| left | Signed 24 bits | L[n] |
+| right | Signed 24 bits | R[n] |
+| frame_id | Unsigned 32 bits | Input interval identity |
+| valid / ready | One bit each | Complete pair available / receiver acceptance |
+
+Raw stereo audio is **48 bits**, excluding metadata; bypass transaction data **80 bits**, excluding handshake. Preset metadata is deferred to DSP/control and distinct from frame ID.
+
+Transfer exactly once on each processing rising edge with valid and ready. While valid high / ready low, hold valid and all 80 bits until accepted or defined reset flush. Acceptance transfers ownership, not a promise of playback. Receiver can accept stale data for discard; sender cannot withdraw stalled data when its deadline passes. Internal backpressure cannot pause ADC/DAC or serial clocks.
+
+### Storage and simultaneous transfers
+
+| Storage | Initial depth | Supported build-time depths | Capacity accounting |
+| --- | --- | --- | --- |
+| RX complete-pair queue | 2 | 1, 2, 4, 8 | Includes presented head; excludes partial assembly |
+| TX waiting-pair storage | 1 | 1, 2, 4, 8 | Additional to RX; excludes current serialized pair |
+
+Derive dependent widths/counts; reject unsupported depths until contract/tests extend them. Parameterization does not imply arbitrary formats/clocks/combinations or runtime resizing. Document units/default/legal relationships for new parameters. Two RX entries hold 96 raw audio bits plus metadata. Stall tolerance depends on occupancy/arrival phase, not capacity alone.
+
+Full RX [A, B] can dequeue A and enqueue complete C on the same edge → [B, C], no overflow. If no space remains after an **actual** same-edge dequeue, reject incoming whole pair and count overflow; never overwrite stalled head. Preserve order.
+
+TX can promote a waiting pair and accept eligible replacement on the same boundary without artificial backpressure. Empty waiting storage can accept expected data exactly on its deadline into current serialization without artificial silence. Never overwrite current output. For bypass, admit only data due for the next unfilled output slot to TX waiting; future pairs stay upstream, stale pairs transfer/discard, due data with reserved waiting slot is backpressured. Larger depths do not permit arbitrary future prefetch or change delay. Register/FSM organization remains code-local.
+
+### Frame IDs, deadlines and late data
+
+Advance ID for **every complete aligned pair**, including overflow rejection; preserve gaps. Cold-qualification ignored pairs consume no IDs. Audio reset flushes all data and restarts IDs **and playback schedule at zero**; controller reconnect does not. External reset epoch reporting is deferred.
+
+Compute `(received - expected) modulo 2^32` and interpret as signed two's-complement: zero due, positive future, negative late, assuming true separation strictly below 2^31 intervals. Exactly half-range is ambiguous, violates stream contract, must fail an assertion and cannot authorize playback. Verify wrap and retained age.
+
+Input pair n plays in the **next stereo output slot**, while RX receives n+1. Select whole pair at left LRCK boundary. Expected valid/ready transfer on its scheduling processing edge is on time; launch left MSB one SCLK period later. Missing expected pair → whole signed-zero pair plus underflow, clocks/alignment preserved. Stale/future data cannot substitute. Resume real data at whole-pair boundary when its expected data exists.
+
+Continuously drain stale heads by receiver acceptance/discard between boundaries; do not replay late data or increase delay to catch up. Support one accepted pair per processing cycle when eligible; expose RX enqueue within one processing cycle. Throughput depends on **initiation interval**, not latency alone; budget both channels, shortest frame, stalls and drain work.
+
+### Edge budget and progress bound
+
+[Editable edge-budget diagram](diagrams/bypass-edge-budget.svg) is an ideal 50% duty, aligned-clock study, not measured pin timing. t=0 is R[n] LSB capture; LSB launch was −0.5 Tbit. Next left boundary +7.5 Tbit, MSB launch +8.5, DAC capture +9.
+
+| Event | Exact 48 kHz / 3.072 MHz baseline | Processing periods at /32 SCLK |
+| --- | --- | --- |
+| Left boundary / selection | 2.441406 µs | 240 |
+| Left MSB launch | 2.766927 µs | 272 |
+| Left MSB capture | 2.929688 µs | 288 |
+
+Approximate first-build selection/launch are 2.441379/2.766897 µs with nominal 100 MHz reference. These windows include assembly, selection, preparation, delays and margin. DAC capture gives no extra preparation time after TX launch. Illustrative 100 MHz / 48 kHz averages 2083.33 cycles/frame; **100 MHz is not selected processing**. First-build ratios give 2048 cycles/frame. Slot displacement is not full codec/acoustic latency.
+
+Monitor each nonempty RX and TX-waiting queue independently during active operation. **2048 processing cycles without dequeue/promotion progress** counts one stall timeout, latches warm reset for next left boundary. Actual transfer, including stale discard, on threshold edge wins and resets timer. Empty/startup/reset queues excluded. Coalesce requests until reset; reset highest priority. Watchdog cannot depend on UART/browser or stalled handshake.
+
+Verify retained-frame age bound `(RX depth + TX-waiting depth + 2)` frame periods, at most 18 supported, far below 2^31. Clock loss flushes before numbering restarts. Capacity changes do not extend deadlines, add playback delay or correct sustained rate mismatch. Later-slot fallback needs coordinated schedule/late-policy/test revision, not automatic override.
+
+## Reset and recovery
+
+### Warm audio reset
+
+With healthy clocks, finish current pair; apply qualified request at next left boundary, including that boundary if request qualifies there. Keep MCLK/SCLK/LRCK running. Reset wins over same-edge transfers/playback: flush partial RX, queues and TX data; reset IDs/schedule; send whole silence. Boundary can start fresh frame-zero capture; play it at following left boundary if complete. No mixed reset epochs/replay.
+
+Synchronize/debounce center button: one qualified press, release rearms, held press no repeats. Exact filter/state implementation is code-local. Preserve diagnostics; do not repeat healthy cold guard.
+
+### Cold start and clock loss
+
+Synchronize reset release per domain; suppress invalid data until qualified. LOCKED is not codec-ready. Configurable initial guard: **nominal 1000 ms after valid codec clocks begin**. Run clocks/framing with zeros, ignore input, then capture frame zero at first left boundary at/after expiry. Derive counter from processing frequency/ms, rounded up.
+
+Guard is a design target, not ready pin. SRC-005 §§4.4–4.5 describe component-dependent VQ ramp plus about 2000 sample periods; SRC-002 shows 10 µF VQ (datasheet ramp example about 420 ms). Confirm actual module/power/settling. No codec reset pin assumed.
+
+Clock-validity loss invalidates immediately; flush before release, independent of a stopped processing clock. Board reference supervises MMCM reset/reacquisition and synchronized release. **Automatic qualified restart** repeats cold guard; validity loss restarts guard. Implement defined inactive pads while unqualified. Absent clocks cannot carry digital silence; quiet analog output during clock/power loss is not guaranteed. Complete reference/power loss needs reinitialization.
+
+ESP32/Wi-Fi/UART loss alone does **not** stop/reset audio or flush frames. Last active settings continue absent valid update/defined audio reset; parameter reset/reconnect remains a later control contract.
+
+## Diagnostics and user interfaces
+
+### Bypass diagnostics
+
+Selected October 15: five unsigned **32-bit saturating** counters, maximum 4294967295, plus one sticky LED.
+
+| Counter | One event means |
+| --- | --- |
+| underflow | Expected runtime pair missing at selection deadline |
+| overflow | Complete incoming pair rejected after same-edge accounting |
+| late_discard | Stale pair accepted and discarded |
+| stall_timeout | Queue no-progress threshold; recovery requests coalesced until reset |
+| recovered_clock_loss | Detected loss episode completes qualified recovery |
+
+Any fault sets LED0; clock-loss detection latches evidence while reference is available for presentation after recovery. Preserve counts/LED across warm reset/recoverable loss; initialize zero at power-up/reconfiguration. Down-button diagnostic clear clears all five/LED without changing audio/IDs/clocks/queues. New event on clear wins: its counter one, LED on, others zero. Multiple classes per edge allowed; sum is not unique lost frames. Intentional startup/reset silence is not underflow. Diagnostics never block audio. Later UART/browser equivalents must retain semantics; wire map open.
+
+### Browser, VGA and telemetry
+
+Browser is full control/diagnostics; VGA required compact read-only applied settings/meters/faults. 640×480 procedural drawing/font ROM is planning direction, not verified target. Both use coherent FPGA status; network/display refresh never gates audio. Distinguish requested/pending/applied settings.
+
+Proposed fields: readiness/connection/version, occupancy/high-water, frame/errors, applied generation, levels/clipping/gain reduction. Snapshot contents/units/interval, refresh/drop/coalescing, CDC owner, stale indication, VGA layout, browser framework/transport and reconnect open. WebSockets and SoftAP are proposals. Telemetry may drop/coalesce; reply arbitration must be bounded. Do not assert campus-network incompatibility without checking chosen network/framework.
+
+## DSP and numeric design
+
+Deferred until accepted bypass: input gain → five biquads per channel → stereo-linked compression → output gain/saturation. Independent left/right history for every EQ section, even with shared coefficients. One compressor gain applied to both channels; maximum-channel envelope remains a modeling proposal. Resource sharing/pipeline structure is open; common-domain multiple effects are possible if initiation interval/deadlines are met.
+
+Start with floating-point audio reference, then bit-exact fixed-point model **before DSP RTL**. Candidate formats only: internal samples 32 bits / 27 fractional, coefficients 32 / 29 fractional, state 40 bits, accumulator 80 bits. Not frozen interfaces or implemented model behavior.
+
+For every block specify width/signedness/scaling, intermediates/state, coefficient order, explicit biquad equation/feedback signs, extension/truncation, rounding, saturation/overflow and state reset. Decide user units (Hz/dB/Q) versus quantized coefficients, computation and validation ownership; match quantization to reference version.
+
+Evaluate quantized poles, cascade boost headroom, silence limit cycles, state overflow, full-scale overload, linked dynamics and bypass/preset transitions. Atomic coefficients alone do not guarantee click-free changes. State continuity/reset/smoothing and measurable transient criteria remain open.
+
+## Control and preset publication
+
+### Required consistency and latest pending wins
+
+| ID | Requirement / review state |
+| --- | --- |
+| D-01 | Both L[n]/R[n] use one preset even if B arrives between processing them. Robel confirmed; An's explicit shared-interface review pending |
+| D-02 | A frame using A in EQ also uses A at compression/all later consumers; retain needed values through last use. Robel confirmed; An's explicit review pending |
+| D-03 | Latest pending wins, jointly agreed October 6: complete validated C may replace unactivated B; partial/invalid C leaves B eligible. Protect active/in-flight values; never report superseded B as applied |
+
+Editable logical diagrams: [frame consistency](diagrams/frame-preset-consistency.mmd), [pending policy](diagrams/pending-preset-policy.mmd), [snapshot lifetime](diagrams/preset-snapshot-lifetime.mmd). An's [Python model](implemented.md#python-preset-and-frame-model) demonstrates snapshots, not FPGA storage/physical timing.
+
+| Logical role | Required lifetime |
+| --- | --- |
+| Staging/shadow | Assemble writes; validate completeness/corruption/parameters before publication |
+| Pending | Latest complete eligible snapshot; atomic replacement, no partial exposure |
+| Activation | Serialize replacement/publication with selection; pin one complete generation per newly admitted frame |
+| Protected generations | Keep active/older in-flight values through all last consumers |
+
+Frame 10 uses A, B is pending, complete valid C supersedes B before activation; later eligible frame may use C. Invalid C preserves B. If B already activated, C waits for later activation; B frames retain B. Do not keep admitting work under A once new preset activates; receipt alone is not activation. A generation tag refers to stored values; it does not preserve them.
+
+Physical alternatives remain open: retained snapshots with bounded reuse, capture needed settings with frames, or finish last old consumer before storage reuse. Waiting audio buffers have separate capacity/deadline/overflow rules from pending presets. Receiver-owned transfers are immutable; replacement cannot mutate in-flight data. Define same-event replacement/activation cutoff, finite storage, readiness/delay, generation wrap and superseded reporting before hardware implementation.
+
+### UART and controller contract
+
+Draft: 3.3 V UART, 115200 baud, common ground. Framing, pins, control clock and PC-versus-ESP32 endpoint selection/mux remain open; no binary map selected.
+
+Required: version/identity/status, shadow read/write, validation/commit/bypass, ACK/NACK with request identity/corruption checking, distinct **received** versus **actually applied** reporting. Bad/partial packets cannot change active values. Superseded requests cannot get applied outcomes. Coherent crossing snapshots stay stable through acceptance; independent per-bit synchronization is invalid.
+
+An's proposal covers delimiter/length/max payload/byte order/types/version, CRC and exact coverage, bounded parser/storage, timeout/resync, sequence scope/wrap, retries/duplicates/lost ACK, either-side reset/reconnect. Review UART input synchronization/sampling and baud error. Bound reply/telemetry arbitration without starving audio or replies. Keep credentials out of Git; coalesce slider changes rather than unbounded queues.
+
+At draft 115200 baud and 8N1, arithmetic capacity 11,520 bytes/s per direction before overhead; illustrative 32-byte packet 2.78 ms versus nominal audio frame 20.83 µs. Packet size/8N1 remain proposals, not measured throughput. Publish valid/corrupt/truncated packet bytes and expected replies once agreed; PC endpoint before ESP32 integration.
+
+## Acceptance plan
+
+These are **future checks/proposed targets, not passing results**. Actual checks belong in [Implemented & Verified](implemented.md#checks-actually-performed).
+
+### Stereo bypass acceptance
+
+| Check | Stimulus and pass condition |
+| --- | --- |
+| Verilator lint / simulation | Record source lists, version/options/assertions. No unexplained warnings, assertion failures or scoreboard mismatches; document accepted waivers |
+| Vivado Simulator directed waveforms | Framing/reset/deadline cases against same independent expectations; investigate disagreements. Do not duplicate five-minute regression by default |
+| Exact digital bypass | Known zero, signed extremes, positive/negative, alternating, distinct-channel patterns; output matches input pairs bit-for-bit in assigned slots, no loss/duplication/swaps |
+| Reproducible randomization | Seeded samples/legal phase-handshake variation, assertions and independent expected-slot scoreboard; initial seeds 1, 42, 2026; retain failing seeds |
+| Continuous normal operation | At least 300 seconds simulated audio after startup, zero corruption/loss/duplication/deadline misses/unexpected recovery; drain/check accepted final frames |
+| Hardware serial | Measure actual MCLK/SCLK/LRCK/data, format/channel identity/rate/bypass after electrical/constraint review |
+| Analog preservation | Repeatable stereo waveform, documented levels, electrical capture/listening. No unexpected swaps/dropouts/corruption; gain/response/distortion tolerances open |
+| Acoustic latency | Goal 5 ms signal entry → audible speaker playback. Hard limit, exact input point, mic distance, common time reference, playback setup and tolerances open |
+
+Five minutes means **simulated audio time**, not wall time. Nominal 48 kHz gives 14,400,000 pairs; first-build target about 14,400,159 pairs/300 seconds. Derive duration/count from actual simulation clock; drain final accepted data. Injected-fault tests are separate from normal error-free run. Placeholder commands are not evidence.
+
+Digital equality is exact; converter/speaker recordings need tolerances. Listening cannot prove zero digital errors; simulation cannot establish acoustic latency. [Measurement scope](diagrams/bypass-measurement-scope.mmd). Keep separate digital/electrical delay for diagnosis.
+
+### Required boundary and fault scenarios
+
+| Area | Required observations |
+| --- | --- |
+| Serial / pairing | Signed payload, polarity, one-bit delay, edges/padding, distinct channels and reset phases; no partial/mixed pair |
+| Valid/ready | Stable valid/all 80 bits while stalled; one acceptance per eligible edge; acceptance may mean stale discard |
+| Depths | All 16 RX/TX combinations of 1/2/4/8, unsupported rejection, order/occupancy and separate partial/current accounting |
+| Same edge | Full RX dequeue/enqueue no false overflow; TX promotion/replacement; empty-slot eligible deadline-edge transfer plays |
+| Cutoff | Before/exactly deadline plays; one cycle after late; missing expected data gives whole silence/underflow |
+| IDs / retention | Overflow gaps, wrap near 0xffffffff, due/late/future, retained-age bound; half-range never authorizes playback |
+| Drain / watchdog | Eligible stale transfer/cycle, RX exposure within cycle; 2048-cycle timeout; threshold progress wins; empty/startup/reset excluded |
+| Warm reset | Qualified single press, no held repeat; whole-pair/reset priority, flush/ID zero, healthy clocks/diagnostics preserved |
+| Cold / loss | Zero serialization during guard, aligned restart, loss restarts guard, stopped-clock invalidation, one recovered-loss event |
+| Diagnostics | Saturation, clear/new-fault collision gives one, simultaneous classes, clear independent of audio, intentional silence excluded |
+| Control independence | Disconnect/malformed traffic/telemetry cannot stall/reset/flush audio by themselves |
+
+Use independent I2S source/sink models and expected-slot scoring including injected silent slots. Before physical acceptance verify actual Pmod/JP1/revision, voltage/pins, oscillator, generated clocks, external constraints, routed timing and startup on real hardware.
+
+### Later subsystem verification
+
+| Subsystem | Future checks |
+| --- | --- |
+| EQ / numeric DSP | Floating/bit-exact comparison, impulse/tones/sweep/silence/noise, signs, quantized stability, headroom, limit cycles, overload/transitions |
+| Compressor | Threshold/ratio, attack/release/envelope, equal channel gain, clipping/saturation |
+| Presets | B between L/R, A retained after B activation, valid C supersedes B, invalid/partial C preserves B, already-active B retained, activation races/full storage/reset/reconnect |
+| UART / web | Truncation, oversized length, bad CRC, unsupported commands/values, timeout, lost ACK/duplicates/retries, resets and congestion |
+| Actual CDC | Coherent snapshots, related/asynchronous constraints, stopped clocks/resets/queues; unequal-clock FIFO tests if such a crossing is introduced |
+| Release | Reproducible build/program/demo, routed timing and reviewed clock/reset/CDC/I2S constraints |
+
+Proposed later targets: EQ within 0.5 dB of agreed reference over defined range; 30 minutes hardware operation without frame/FIFO errors. Neither achieved nor a substitute for five-minute simulation. Record commit/tools/commands/configuration/levels/instruments/plots/limits; large generated artifacts outside source control.
+
+## Ownership and delivery
+
+### Responsibilities
+
+| Area | Primary owner | Review / boundary |
+| --- | --- | --- |
+| Audio clocks/reset, RX/TX, paired transport/buffers | Robel | An pins/shared interfaces |
+| Gain/EQ/compression/saturation; audio reference/bit-exact models | Robel | An controls; shared vectors |
+| ESP32, Wi-Fi/browser | An | Robel parameter meanings |
+| FPGA UART/parser/shadow/ACK; PC utility | An | Robel consumption/CDC; shared faults |
+| VGA | Shared | An layout/control; Robel meters/clocks/integration |
+| CI plumbing | An | Both maintain checks |
+| Board integration/release | Shared | Both reproduce final demo |
+
+First bypass integration is **unassigned per Robel**. Whoever takes it claims task before concurrent top-level edits and obtains collaborator review. Block ownership does not assign unanswered crossing/activation boundaries. Robel defines consumption, An transport; agree both sides first.
+
+### Increment sequence
+
+| Increment | Audio / Robel direction | Control / An direction | Exit evidence |
+| --- | --- | --- | --- |
+| Current design gate | Codec → clock feasibility/reset → stereo contract | Framing/ownership/shadow proposal in parallel | Boundaries reviewed; missing evidence explicitly blocked/assigned |
+| Stereo bypass | RX/queues/TX/reset/diagnostics | PC identity/status independently | Bypass acceptance; UART not required |
+| Controlled filter | Floating/bit-exact one biquad/channel | Shadow/commit simulated consumer, then audio | Model agreement/coherent activation |
+| Five-band EQ | Stereo cascade/headroom | Presets/live controls | Stable measured programmable EQ core |
+| Compression | Linked dynamics | Controls/telemetry | Equal gain and verified overload/dynamics |
+| Required interfaces | Meters/VGA integration | ESP32/browser/VGA layout | Coherent full controls + local status |
+| Qualification | Timing/response/latency | Fault recovery/reproduction | Both reproduce release evidence |
+
+Original 12–14-week estimate at 5–7 hours/person/week is not a deadline; re-estimate after bring-up. An's dependencies: reviewed packet contract → PC identity/status → simulated shadow/commit consumer → real audio integration → ESP32/web → telemetry/usability. Framework/pins/fields resolved for relevant slice. Simulated consumer cannot prove real DSP timing.
+
+**Next teaching/design block:** trace one frame from final ADC right-bit capture through queue acceptance, the 240-cycle selection window, next-slot TX and resets/faults. Turn trace into source lists, independent source/sink models and expected-slot scoreboard when implementation is authorized. An can bring annotated UART packets/shadow proposals for joint review in parallel.
+
+## Open decisions
+
+Working fill-in list: retain prior worksheet IDs; selected bypass answers live above rather than repeated as unanswered. Blank answers mean open. Resolve later choices at their increment, not just to close bypass. Owner entries reflect existing responsibility/review, not new assignment of unanswered boundaries.
+
+| IDs / gate | Question requiring answer/evidence | Owner / review | Answer / evidence / deferral |
+| --- | --- | --- | --- |
+| H-01, H-03 | Actual Pmod identity/revision/JP1/levels/orientation; rev. C manual applicability to D.1; physical pins | Robel; shared wiring | Before hardware connection/acceptance |
+| H-02, H-04 | Exact ESP32 board/USB/schematic/safe GPIO/framework/version | An; Robel integration | UART/ESP32 slice |
+| H-05 | Power sequencing/back-power protection and either-board-off behavior | Shared | |
+| H-06, C-02 | Legal instantiated clock resources; PFD/VCO/phase/duty/jitter units/budgets, I/O delays/constraints, routed timing/measurement | Robel; shared review | Configuration only; other evidence open |
+| C-03, C-04, I-01 | Control/VGA clocks, coherent endpoints/owners, reset/publication/activation/telemetry boundaries | Shared | Common audio domain selected; others open |
+| C-05, C-06 | Physical startup/settling/guard, stopped-clock pad/reset implementation | Robel; shared review | Digital policy selected; physical evidence missing |
+| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | Requirements selected; no RTL evidence |
+| P-01 | An's explicit D-01/D-02 review/additional cases | An / Robel | |
+| P-02, N-01, N-03 | Snapshot validity, controller/FPGA validation, coefficient computation/reference, quantized stability/headroom | Shared; Robel numerics | Controlled-DSP slice |
+| P-03, P-05, P-06 | Activation readiness/boundary/delay, immutable cutoff, same-event C replacement vs B activation | Shared | Python call ordering is not hardware contract |
+| P-04, P-08 | Protected generations, last-use/reuse, finite storage/full/backpressure | Shared | Python snapshots do not select storage |
+| P-07, U-05, U-06 | Received/pending/superseded/applied outcomes; sequence/generation wrap, lost-ACK/retry/duplicate/reset/reconnect | An proposes; shared review | |
+| P-09 | Production startup/default/bypass, DSP state after audio reset, controller reconciliation | Shared | Python bypass/0 dB only model behavior |
+| U-01 | PC/ESP32 endpoint count/pins/selection/arbitration/authority | Shared | |
+| U-02–U-04, U-07 | Baud/error/framing/delimiter/length/order/version/CRC/coverage, timeout/resync, reply/telemetry scheduling, example bytes | An proposes; shared review | 3.3 V / 115200 draft; no frozen wire map |
+| N-02, D-04, D-05 | Numeric units/widths/signs/order, DSP resource schedule/II, state/intermediates/rounding/saturation | Robel proposes; shared review | Candidate formats; beyond bypass |
+| D-06, D-07 | Compressor algorithm/units; state/click/transient policy for preset/bypass | Robel; An controls | Modeled DSP increments |
+| D-08 | Response/overload/default chain/analog tolerance | Shared | 0.5 dB proposal only |
+| T-01–T-04 | Snapshot fields/interval/units/CDC owner/rate/drop, stale/reconnect behavior, VGA/browser layout/framework | Shared; An UI, Robel audio status | Required roles selected; details deferred |
+| I-02, I-04 | Claim integration, source lists/build Tcl/XDC/benches/programming/evidence owner per increment | Unassigned integration; shared review | Claim before concurrent top-level edits |
+| I-03, I-05 | Normal/fault walkthrough, actual blockers and readiness for next authorized slice | Shared | Acceptance matrix; tests outstanding |
+| I-06 | Re-estimate after bring-up; each person's next task | Robel / An | |
+| Latency / analog | Entry/playback points, mic distance/setup/instruments, hard limit and analog tolerances | Shared | 5 ms goal, hard limit intentionally open |
+
+Closed administrative items: I-07 old kickoff formatting/branch reconciliation complete; An's outstanding Python work merged. I-08 wording now says frame transport/buffers; no internal async FIFO selected. Physical evidence and shared review remain gates; a recorded plan/passing repo check is not audio acceptance.
+
+## Source register
+
+Stable IDs shared across both documents. Rows record title/publisher, URL, revision/version, exact section/page, ANIMA use, reviewer/date/status. Reviewer/date means register reconciliation, not every source fetched that day; original consultation/failure dates retained. Unavailable/supplementary sources do not establish manufacturer facts. Verify actual applicability before acceptance.
+
+| ID | Title / publisher / URL | Revision / exact locator / ANIMA use | Reviewer / date | Review status |
+| --- | --- | --- | --- | --- |
+| SRC-001 | [Basys 3 Reference Manual - Digilent](https://digilent.com/reference/_media/basys3:basys3_rm.pdf) | Rev. C, April 8, 2016; p. 1: revision applicability; section 4, p. 6: 100 MHz reference and clock resources. Reconsulted 2026-10-08; reviewer: Robel; physical-board applicability pending | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-002 | [Pmod I2S2 schematic - Digilent](https://digilent.com/reference/_media/reference/pmod/pmodi2s2/pmodi2s2_sch.pdf) | A.0, January 16, 2018; sheet 1, J1/JP1/IC1-IC3 and C9: connector nets, ADC mode and DAC VQ capacitor. Robel / 2026-10-15: consulted; physical-board applicability pending | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-003 | [Pmod I2S2 Reference Manual - Digilent](https://digilent.com/reference/pmod/pmodi2s2/reference-manual) | Board operation/jumper cross-check; previous access returned HTTP 403; retry on 2026-10-15 also failed, so not used as evidence | Robel / 2026-10-15 register reconciliation | Pending access; not used as evidence |
+| SRC-004 | [CS5343/4 datasheet - Cirrus Logic](https://statics.cirrus.com/pubs/proDatasheet/CS5343-44_F5.pdf) | DS687F5, March 2015, marked Draft: timing pp. 9-10; sections 4.1-4.2 / Tables 1-5 / Figure 4, pp. 12-14: ADC ratios, mode and I2S. Confirm applicable released revision | Robel / 2026-10-15 register reconciliation | Consulted; Draft/released-revision confirmation pending |
+| SRC-005 | [CS4344/5/8 datasheet - Cirrus Logic](https://statics.cirrus.com/pubs/proDatasheet/CS4344-45-48_F2.pdf) | DS613F2, July 2013: timing p. 9; sections 4.1-4.2 / Table 1 p. 12; Figure 7 p. 13; sections 4.4-4.5 / Figure 11 pp. 15-16: DAC ratios, external SCLK and startup | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-006 | [7 Series Clocking Resources - AMD/Xilinx](https://docs.amd.com/v/u/en-US/ug472_7Series_Clocking) ([PDF](https://docs.amd.com/api/khub/documents/1kFbRqzm2fhwGy~cLQG2yA/content)) | UG472 v1.14: primitive ports pp. 70-71; LOCKED p. 83; Clocking Wizard p. 102 | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-007 | [Clocking Wizard: Configuring Output Clocks - AMD](https://docs.amd.com/r/en-US/pg065-clk-wiz/Configuring-Output-Clocks) | PG065 v6.0, April 20, 2022; named HTML section: requested/actual frequency and fractional-divider restrictions | Robel / 2026-10-15 register reconciliation | Consulted; tool configuration is separate from timing closure |
+| SRC-008 | [Basys 3 public schematic - Digilent](https://digilent.com/reference/_media/reference/programmable-logic/basys-3/basys-3-sch-public-rev-d.pdf) | Doc. 500-183, D.1, February 5, 2021; sheet 1 of 8, title block and PMOD, I/O; sheet 6, IC7C bank 34 / W5 and XC7A35T-1CPG236C: explicit revision matches Robel's reported board; connector/electrical review input. Reviewer: Robel; consulted 2026-10-08; D.1 clock/JA/button/LED netlist cross-checked on 2026-10-15 (sheet 6, IC9/IC7A/IC7C/IC7D); physical connection and electrical timing pending | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-009 | [Basys 3 online reference manual - Digilent](https://digilent.com/reference/programmable-logic/basys-3/reference-manual) | Revision and exact section unavailable: retrieval failed on 2026-10-08. Intended use: D.1 applicability and operating requirements. Reviewer: Robel; pending access, not used as evidence | Robel / 2026-10-15 register reconciliation | Pending access; not used as evidence |
+| SRC-010 | [ESP32 Pinout Reference - Last Minute Engineers](https://lastminuteengineers.com/esp32-pinout-reference/) | Unversioned HTML; sections ESP32 UART Pins and ESP32 Strapping Pins. Supplementary reading for UART/boot-pin questions only; not manufacturer evidence or confirmation of this DevKit V1's wiring. Reviewer: Robel; consulted 2026-10-08; exact module/board and primary-document cross-check pending | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
+| SRC-011 | [ESP32 DevKit pinout image - Reddit user submission](https://www.reddit.com/media?url=https%3A%2F%2Fpreview.redd.it%2Fa-better-pinout-diagram-for-esp32-devkit-development-board-v0-0u14t38nxeo21.png%3Fwidth%3D1200%26format%3Dpng%26auto%3Dwebp%26s%3D54d4999219ffd8a362a7a60208c17fd8176b8cac) | User-supplied image reference; author, revision and image content unverified because retrieval failed on 2026-10-08; no page/section available. Intended use: supplementary board identification. Reviewer: Robel; pending access, not used as wiring evidence | Robel / 2026-10-15 register reconciliation | Pending access; not used as evidence |
+| SRC-012 | [I2S bus specification - NXP Semiconductors](https://www.nxp.com/docs/en/user-manual/UM11732.pdf) | UM11732 rev. 3.0, February 17, 2022; section 3.1 p. 4: MSB delay and word-length handling; section 3.2 p. 5: word select; section 6.1 p. 8 / Figure 5 p. 9: transmitter zeros after LSB. ANIMA use: 24-bit payload in 32-bit slots and transmitter zero padding. Reviewer: Robel; consulted 2026-10-08; relevant format sections reviewed, codec-specific electrical/timing integration pending | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-013 | [RFC 7005 - IETF](https://www.rfc-editor.org/rfc/rfc7005.html) | September 2013; section 3 p. 4 and section 3.2 p. 5: playout deadlines and fixed-delay buffering. ANIMA use: conceptual comparison of late-data discard versus changing playback delay; RTP is not an ANIMA interface and this source does not establish audible superiority or select a frame policy. Reviewer: Robel; consulted 2026-10-08; analogy reviewed, ANIMA policy and audio evidence pending | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
+| SRC-014 | [Basys 3 master XDC - Digilent](https://github.com/Digilent/digilent-xdc/blob/c8644a9fe31cc803789643124545d56b3bef4600/Basys-3-Master.xdc) | master tip c8644a9fe31cc803789643124545d56b3bef4600 identified on 2026-10-15; consulted master file sections Clock signal, Buttons, LEDs and Pmod Header JA. Header calls out rev. B, so D.1 schematic SRC-008 is the pin-map authority. Reviewer: Robel / 2026-10-15; supplementary comparison only, no XDC/code copied | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
+| SRC-015 | [DSC1033 datasheet - Discera, hosted by Microchip](https://ww1.microchip.com/downloads/en/DeviceDoc/DSC1033_Datasheet.pdf) | MK-Q-B-P-D-031809-01-8; Specifications p. 2 and Ordering Information p. 8: oscillator conditions and code S=1 (+/-50 ppm), temperature code C. ANIMA use: tolerance of IC9 part named in D.1 schematic, not a fitted-part or frequency measurement | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+
+No external code is reused. Any future reuse must record its original immutable commit/release, reused paths, license/SPDX and license URL; documentation references do not grant code licenses.
+
+Pending reading targets from An's notes, **not consulted evidence**: exact-board Espressif datasheet/strapping table and version-matched ESP-IDF UART guide; Cummings, CDC Design & Verification Techniques Using SystemVerilog (SNUG 2008); UART/framing tutorials and CRC/COBS/SLIP specifications if proposed. Add stable IDs, versions/locators and review records when consulted. No new claim here depends on those targets.
+
+## Design history and contribution credit
+
+An Tiet's interconnect questions, electrical/protocol risks and delivery dependencies are incorporated above. Full original notes remain in immutable history: [October 4 kickoff](https://github.com/Rkycodes/ANIMA/blob/d77741fc47be789ec7ce2ae14417c2a0c8425738/docs/notes/2026-10-04-interconnect-kickoff.md) and [October 6 gameplan](https://github.com/Rkycodes/ANIMA/blob/e6bd0a58a294aa1bd976dd53b5025ed9aa205161/docs/notes/2026-10-06-an-gameplan.md). They were proposals/learning notes, not agreed contracts. Live requirements reside here instead of duplicate transcripts.
+
+[Planning checkpoint ee525f9](https://github.com/Rkycodes/ANIMA/tree/ee525f973c7c4b49c893a25aae8cd69f915a8674/docs) preserves prior worksheet wording/dates. October 8 selected serial/common-domain/scheduling directions; October 15 selected widths/depths/reset/diagnostics/guard/progress and evaluated first-build clock target. Reorganization does not silently resolve open DSP/control choices.
