@@ -3,8 +3,8 @@
 import unittest
 from dataclasses import FrozenInstanceError
 
-from preset import Preset, PresetConfig, PresetStatus as Status
-from preset_manager import PresetManager
+from sim.fpga_control_logic.preset import Preset, PresetConfig, PresetStatus as Status
+from sim.fpga_control_logic.preset_manager import PresetManager
 
 
 def make_preset(name="A", gain=0.0, bypass=False):

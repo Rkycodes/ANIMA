@@ -6,9 +6,9 @@ These exercise snapshot ownership, not DSP arithmetic or FPGA storage release.
 import unittest
 from dataclasses import FrozenInstanceError
 
-from audio_frame import FrameStage
-from preset import Preset, PresetConfig, PresetStatus as Status
-from preset_manager import PresetManager
+from sim.fpga_control_logic.audio_frame import FrameStage
+from sim.fpga_control_logic.preset import Preset, PresetConfig, PresetStatus as Status
+from sim.fpga_control_logic.preset_manager import PresetManager
 
 
 def make_preset(name="A", gain=0.0):
