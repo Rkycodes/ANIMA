@@ -4,6 +4,8 @@
 !.env.example
 .vscode/
 .idea/
+# Local learning notes
+.vibe-wise/
 # Python
 __pycache__/
 *.py[cod]

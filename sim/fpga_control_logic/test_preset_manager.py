@@ -31,8 +31,13 @@ class PresetManagerTests(unittest.TestCase):
         self.assertIsNone(self.manager.pending)
 
     def test_activation_without_pending_is_a_no_op(self):
+        # First consume the default startup preset, leaving no pending update.
         self.manager.activate()
-        self.assertIsNone(self.manager.active)
+        startup = self.manager.active
+        snapshot = self.manager.active_snapshot
+        self.manager.activate()
+        self.assertIs(self.manager.active, startup)
+        self.assertIs(self.manager.active_snapshot, snapshot)
         self.assertIsNone(self.manager.pending)
 
         candidate = make_preset()
@@ -118,6 +123,8 @@ class PresetManagerTests(unittest.TestCase):
                     self.assertTrue(self.manager.validate_config(config, -12, 12))
 
     def test_invalid_values_are_rejected_by_validation_and_submit(self):
+        startup = self.manager.pending
+        snapshot = self.manager.pending_snapshot
         invalid_configs = [
             PresetConfig(False, gain)
             for gain in (-12.01, 12.01, float("nan"), float("inf"),
@@ -132,7 +139,8 @@ class PresetManagerTests(unittest.TestCase):
                 self.manager.submit(candidate)
                 self.assertEqual(candidate.status, Status.REJECTED)
                 self.assertIsNone(self.manager.active)
-                self.assertIsNone(self.manager.pending)
+                self.assertIs(self.manager.pending, startup)
+                self.assertIs(self.manager.pending_snapshot, snapshot)
 
     def test_missing_or_wrong_config_is_rejected_without_losing_pending(self):
         pending = make_preset("B")
