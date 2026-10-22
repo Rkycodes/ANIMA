@@ -150,6 +150,26 @@ TX changes data on SCLK falling edges; RX captures rising. Change LRCK on a fall
 
 After each 24-bit LSB, TX sends zeros until next MSB; no sign-extension padding. Of 32 periods between LRCK transitions, first is the preceding word's tail, then 24 new payload bits and seven trailing periods. The eighth post-LSB zero is across the next LRCK transition before the following MSB. RX excludes padding. See SRC-012 §6.1 / Figure 5 and codec timing sources.
 
+### Receiver block contract
+
+The [I2S receiver](../rtl/audio/anima_i2s_receiver.v) uses separate signed 24-bit L/R assembly registers. The registered complete-pair event is an ingress event to the separate RX queue, not its downstream valid/ready interface. No ready input can pause the ADC or suppress frame-ID advancement.
+
+| Port | Direction / width / representation | Contract |
+| --- | --- | --- |
+| audio_clk | Input, one bit | Same processing domain as timing, reset application and queue ingress |
+| reset_n | Input, one bit, active low | RX hard reset: asynchronous assertion, externally synchronized release; may remain asserted while timing runs during future cold qualification |
+| warm_reset_apply | Input, one bit, active high | Shared pre-edge reset action, qualified at the left boundary; clears RX data/IDs and allows fresh frame-zero assembly from that boundary |
+| left_boundary_ce / sclk_rise_ce | Inputs, one bit each | Pre-edge events from the selected serial-timing block |
+| slot_bit / right_slot | Inputs, unsigned 5 bits / one bit | Upcoming slot position 0–31 and channel 0 left / 1 right |
+| adc_sdata | Input, one bit | ADC serial data sampled on processing edges with sclk_rise_ce; physical related-clock I/O timing still requires constraints/validation |
+| left_sample / right_sample | Outputs, signed 24 bits each | Assembly values; meaningful as a complete pair only with pair_complete at the receiving edge |
+| frame_id | Output, unsigned 32 bits | Completed pair's snapshotted ID; reset to zero, modulo-2^32 advancement for every complete pair regardless of queue acceptance |
+| pair_complete | Output, one bit, registered | One-processing-cycle completion event; the queue samples the complete payload/ID at E+1 |
+
+Only capture slot positions 1–24 on sclk_rise_ce. Position 0 belongs to the preceding word; padding 25–31 is ignored. After hard-reset release, ignore input until the first eligible left boundary, then collect L and R from that whole interval. This interface does not implement the cold guard: the future supervisor must qualify/release the RX reset before the selected start edge. A warm reset clears partial/published data, completion and ID state without resetting serial timing; its boundary starts fresh frame-zero capture.
+
+On E, the final right bit enters the R register, pair_complete is registered high, frame_id snapshots the current ID and the next ID advances. On E+1, the queue sees the completed L/R and their snapshotted ID before pair_complete clears. The next serial payload starts later, so no additional output sample bank is needed for this fixed ingress contract. Values outside the completion event may be partial and have no stalled valid/ready lifetime. The queue copies an accepted pair or rejects it whole on E+1; it owns any storage needed for downstream backpressure. Of the 240-cycle capture-to-selection window, one cycle is used before queue ingress, leaving 239 to the next boundary before further queue/scheduling work.
+
 ### Custom valid/ready interface
 
 No AXI interface is selected. Each transaction carries these fields together:
@@ -211,6 +231,24 @@ Verify retained-frame age bound `(RX depth + TX-waiting depth + 2)` frame period
 With healthy clocks, finish current pair; apply qualified request at next left boundary, including that boundary if request qualifies there. Keep MCLK/SCLK/LRCK running. Reset wins over same-edge transfers/playback: flush partial RX, queues and TX data; reset IDs/schedule; send whole silence. Boundary can start fresh frame-zero capture; play it at following left boundary if complete. No mixed reset epochs/replay.
 
 Synchronize/debounce center button: one qualified press, release rearms, held press no repeats. Exact filter/state implementation is code-local. Preserve diagnostics; do not repeat healthy cold guard.
+
+#### Warm-reset controller interface
+
+The [warm-reset controller](../rtl/audio/anima_warm_reset_controller.v) implements the selected pending-request/left-boundary mechanism. All ports are unsigned single-bit signals; it has no frame payload, FIFO, counter or tunable timing parameter.
+
+| Port | Direction / representation | Contract |
+| --- | --- | --- |
+| audio_clk | Input, clock | Same processing domain as serial timing and the audio-data consumers |
+| reset_n | Input, active low | Hard reset: asynchronous assertion and externally synchronized release; clears pending state and masks application |
+| reset_request | Input, active high | Qualified audio-domain request event, normally one processing-clock cycle; raw buttons and asynchronous inputs are conditioned upstream |
+| left_boundary_ce | Input, active high | Timing block's pre-edge phase-zero enable, independent of available audio frames |
+| reset_pending | Output, registered, active high | At least one sampled request awaits application; requests coalesce while pending |
+| warm_reset_apply | Output, combinational, active high | Pre-edge reset action: reset_n and left_boundary_ce and (reset_pending or reset_request) |
+
+An off-boundary request sets pending. On the earliest eligible left boundary, application wins and clears pending. A fresh request on that boundary applies immediately; pending plus another request on the same boundary produces one application, with no extra reset retained. Hard reset abandons pending work. Request sources must stop asserting after their event/application: a level held beyond application can request a later reset again; held-button suppression belongs upstream.
+
+Consumers sample warm_reset_apply on the processing rising edge and give it priority over ordinary data transfers. Do not register application one cycle after the boundary. Timing and diagnostic state must not be warm-reset by this signal. The controller does not itself flush RX/queues/TX, restart IDs, synchronize/debounce buttons, detect watchdog stalls, supervise stopped clocks or perform cold qualification; those integrations remain to be implemented.
+
 
 ### Cold start and clock loss
 
@@ -383,7 +421,7 @@ Working fill-in list: retain prior worksheet IDs; selected bypass answers live a
 | H-06, C-02 | Legal instantiated clock resources; PFD/VCO/phase/duty/jitter units/budgets, I/O delays/constraints, routed timing/measurement | Robel; shared review | Configuration only; other evidence open |
 | C-03, C-04, I-01 | Control/VGA clocks, coherent endpoints/owners, reset/publication/activation/telemetry boundaries | Shared | Common audio domain selected; others open |
 | C-05, C-06 | Physical startup/settling/guard, stopped-clock pad/reset implementation | Robel; shared review | Digital policy selected; physical evidence missing |
-| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | Requirements selected; no RTL evidence |
+| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | RX component evidence recorded; queue/scheduling/retained-age proof pending |
 | P-01 | An's explicit D-01/D-02 review/additional cases | An / Robel | |
 | P-02, N-01, N-03 | Snapshot validity, controller/FPGA validation, coefficient computation/reference, quantized stability/headroom | Shared; Robel numerics | Controlled-DSP slice |
 | P-03, P-05, P-06 | Activation readiness/boundary/delay, immutable cutoff, same-event C replacement vs B activation | Shared | Python call ordering is not hardware contract |
