@@ -1,6 +1,6 @@
 # ANIMA — Planning & Design
 
-Design baseline: October 15, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
+Design baseline: October 22, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
 
 ## Contents
 
@@ -106,6 +106,39 @@ Robel approved the October 15 probe as the **first bypass-build target**, subjec
 | With schematic part's ±50 ppm | Approximately 47998.130–48002.930 Hz, −38.966 to +61.035 ppm from 48 kHz |
 
 These are calculations/configuration, not measured frequency, jitter or routed timing. Earlier 98.304 MHz is the nominal arithmetic target; evaluated output is approximate. Actual parts, PFD/VCO/divider legality for the instantiated design, resources/routing, phase/duty/jitter requirements, external-clock realization and setup/hold remain acceptance gates. Do not substitute unchecked fabric clocks or alternating bit periods. Tool/probe reproduction is in [Implemented & Verified](implemented.md#vivado-clock-configuration-evidence).
+
+### Serial-timing block contract
+
+October 22, 2026: [anima_serial_timing](../rtl/audio/anima_serial_timing.v) implements this fixed timing contract. Component lint/simulation evidence and its limits are recorded in [Implemented & Verified](implemented.md#serial-timing-component). Separate RX, queue, scheduler (owning TX waiting storage) and TX blocks remain the selected partition. The first implementation review targets a simulated bypass core; physical clock supervision, I/O constraints and board integration follow. Diagnostic counters will live in the audio domain with a lifetime independent of data flush/reset; reference-side clock-loss evidence must survive until recovery. Simultaneous RX/TX watchdog expiry counts one coalesced stall incident and requests one warm reset.
+
+The timing block has one supported configuration: 8 processing cycles/MCLK, 32/SCLK, 1024/channel slot and 2048/stereo frame. These are cycle ratios, not physical clock validation. Internal logic uses audio_clk and enables; external serial outputs are not internal clock domains.
+
+| Port | Direction / width / representation | Meaning |
+| --- | --- | --- |
+| audio_clk | Input, one bit | Processing clock supplied by the testbench; eventual qualified clock wrapper is separate |
+| reset_n | Input, one bit, active low | Hard timing reset: asynchronous assertion, externally synchronized release; never driven by a normal warm audio reset |
+| phase_cycle | Output, unsigned 11 bits | Phase 0–2047 of the processing edge about to execute; increments once per active rising edge and wraps to zero |
+| mclk / sclk / lrck | Outputs, one bit each, registered | Levels installed on the upcoming edge: low/high for 4/4 cycles, 16/16 cycles and 1024/1024 cycles respectively |
+| sclk_rise_ce | Output, one bit, combinational | High before edges at phase 16, 48, 80, ...; authorizes same-edge capture |
+| sclk_fall_ce | Output, one bit, combinational | High before edges at phase 0, 32, 64, ...; authorizes same-edge launch |
+| left_boundary_ce | Output, one bit, combinational | High before phase-zero edge; inclusive frame-selection deadline |
+| slot_bit | Output, unsigned 5 bits, combinational | Position 0–31 within the upcoming channel slot; tail at 0, payload at 1–24, padding at 25–31 |
+| right_slot | Output, one bit, combinational | Upcoming channel: zero left, one right |
+
+All registers and outputs are zero during hard reset; event enables and metadata are masked while reset_n is low. First post-reset phase zero initializes low serial levels; it is not guaranteed to be a physical falling transition. Subsequent phase-zero edges are ordinary frame boundaries. Full-system cold qualification remains required before capturing audio.
+
+Pre-edge visibility is part of this interface. At a rising processing edge whose pre-edge phase is p, consumers sample that phase's enables/metadata and serial pins are registered for p. After nonblocking updates, phase_cycle describes the next edge. A registered enable produced after the edge is too late to authorize a transfer on that same edge.
+
+| Pre-edge phase | Event |
+| --- | --- |
+| 0 | Left boundary / SCLK launch; previous-word tail |
+| 32 / 48 | Left MSB launch / capture |
+| 1024 | Right boundary / SCLK launch; previous-word tail |
+| 1056 / 1072 | Right MSB launch / capture |
+| 1808 | Right LSB capture; next left selection is 240 processing cycles away |
+| 2047 → 0 | Phase wrap; next left boundary follows |
+
+The staged timing bench checks counting first, then registered clocks, then enables/metadata, then all together. This is component verification, not completed bypass acceptance or the five-minute audio regression. RX-to-queue ingress will be a nonbackpressurable complete-pair event (accept or whole-pair overflow rejection); the stored queue head uses the selected stable valid/ready interface.
 
 ## Stereo bypass contract
 
@@ -263,7 +296,7 @@ These are **future checks/proposed targets, not passing results**. Actual checks
 | Check | Stimulus and pass condition |
 | --- | --- |
 | Verilator lint / simulation | Record source lists, version/options/assertions. No unexplained warnings, assertion failures or scoreboard mismatches; document accepted waivers |
-| Vivado Simulator directed waveforms | Framing/reset/deadline cases against same independent expectations; investigate disagreements. Do not duplicate five-minute regression by default |
+| Vivado Simulator directed waveforms | Available for later targeted investigation when requested or required; current increments use Verilator only. Do not routinely duplicate regression in both simulators |
 | Exact digital bypass | Known zero, signed extremes, positive/negative, alternating, distinct-channel patterns; output matches input pairs bit-for-bit in assigned slots, no loss/duplication/swaps |
 | Reproducible randomization | Seeded samples/legal phase-handshake variation, assertions and independent expected-slot scoreboard; initial seeds 1, 42, 2026; retain failing seeds |
 | Continuous normal operation | At least 300 seconds simulated audio after startup, zero corruption/loss/duplication/deadline misses/unexpected recovery; drain/check accepted final frames |
