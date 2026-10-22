@@ -150,7 +150,7 @@ module tb_anima_uart_rx;
                     send_byte(pattern, BIT_NS/(1.0+offset/100.0), 1);
                 end
                 settle();
-                $display("BAUD OFFSET %+0d%%: %0d failures", offset, failures-before_failures);
+                $display("BAUD OFFSET %0d%%: %0d failures", offset, failures-before_failures);
                 // Characterization only outside the proposed +/-2% requirement.
                 if (offset < -2 || offset > 2) failures = before_failures;
             end

@@ -1,6 +1,6 @@
 # UART receiver behavioral tests
 
-Run from the repository root with Icarus Verilog (`iverilog` and `vvp`) installed:
+Run from the repository root with Verilator 5.x, a C++ compiler, and make installed:
 
 ```sh
 python3 scripts/test_uart_rx.py
@@ -9,8 +9,11 @@ python3 scripts/test_uart_rx.py
 The runner compiles the existing receiver and SystemVerilog bench separately for
 115200 and 9600 baud, assuming a 100 MHz receiver clock. It uses temporary build
 files and returns nonzero on compilation errors or required assertion failures.
-This does not select the production UART clock. The mixed-language compile uses
-`-g2005-sv`; passing it does not certify strict Verilog-2001 compatibility.
+This does not select the production UART clock. The runner uses `verilator --binary --timing` to execute the SystemVerilog
+bench directly. Warnings remain visible but are nonfatal (`-Wno-fatal`), so
+functional checks can run on work-in-progress RTL. Passing this suite is not
+a lint-clean or strict Verilog-2001 certification. Verilator primarily uses
+two-state simulation; the known-value assertion does not prove X propagation.
 
 ## Coverage and assumptions
 
@@ -27,7 +30,7 @@ This does not select the production UART clock. The mixed-language compile uses
   one-clock valid pulse. Output data is consumed only while valid is asserted.
 
 - Sampling time: internal state/counter probes compared to the independently
-  calculated wire midpoint, allowing -1 to +5 receiver clocks for divider
+  calculated wire midpoint, allowing -1 to +5 receiver clocks for
   synchronizer and FSM latency, plus accumulated integer-divider rounding. These probes must change if the
   receiver's internal state encoding or counter architecture changes.
 
@@ -62,3 +65,7 @@ A temporary copy with an exclusive reset/normal-operation branch, explicit
 counter/index/valid reset assignments, and a wire output declaration passed both
 configurations. The working receiver was not edited by this testbench task.
 These results are a snapshot; rerun after receiver edits.
+
+After switching the runner to Verilator 5.052, both baud configurations compiled
+and ran. Each reported the same six reset-check failures; all other exercised
+functional checks and baud-offset streams passed. Warnings remain visible.
