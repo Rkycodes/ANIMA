@@ -1,10 +1,13 @@
 # ANIMA — Implemented & Verified
 
-Evidence baseline: October 15, 2026. Maintained by Robel Yaee and An Tiet. This document describes current repository behavior and actual checks. [Planning & Design](planning.md) owns requirements, future acceptance and open decisions. A passing model test is not audio or FPGA validation.
+Evidence baseline: October 22, 2026. Maintained by Robel Yaee and An Tiet. This document describes current repository behavior and actual checks. [Planning & Design](planning.md) owns requirements, future acceptance and open decisions. A passing model test is not audio or FPGA validation.
 
 ## Contents
 
 - [Current implementation](#current-implementation)
+- [Serial-timing component](#serial-timing-component)
+- [Warm-reset controller](#warm-reset-controller)
+- [I2S receiver](#i2s-receiver)
 - [Python preset and frame model](#python-preset-and-frame-model)
 - [Reproduce current checks](#reproduce-current-checks)
 - [Checks actually performed](#checks-actually-performed)
@@ -22,9 +25,72 @@ Evidence baseline: October 15, 2026. Maintained by Robel Yaee and An Tiet. This 
 | Repository tooling | Standard-library checker and GitHub Actions repository-check job | Hosted CI does not run model tests, RTL simulation or Vivado |
 | Vivado investigation | Device/version/license query and in-memory Clocking Wizard probe | No synthesis, implementation, routed timing or audio executable |
 | Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
-| Audio RTL / firmware / host UART | Directory scaffold only | No executable audio top, bench, XDC, firmware or serial utility |
+| Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | No sample transport, bypass top, codec wrapper or XDC |
+| Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX reset application is tested below; queue/TX flush, button conditioning, diagnostics and clock supervision not integrated |
+| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | No real RX queue, scheduler, TX, cold supervisor or physical ADC validation |
+| Firmware / host UART | Directory scaffold only | No firmware or serial utility |
 
 Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
+
+## Serial-timing component
+
+Implemented October 22, 2026: [anima_serial_timing.v](../rtl/audio/anima_serial_timing.v) advances an unsigned 11-bit phase modulo 2048. Registered MCLK/SCLK/LRCK take pre-edge phase bits 2/4/10; combinational enables and channel/slot metadata describe the edge about to execute. Hard reset asynchronously clears phase/pins and masks enables/metadata. The existing ports and fixed cycle ratios are unchanged; their exact representations and pre-edge convention are in the [block contract](planning.md#serial-timing-block-contract).
+
+All internal logic uses audio_clk; the serial outputs are external waveforms. The block has no warm-reset input, so the later audio-data reset must not drive its hard reset. Warm-reset application now has a separate [controller component](#warm-reset-controller). A physical clock generator, synchronized hard-reset-release wrapper and complete RX-to-TX data path remain unimplemented.
+
+The independent [SystemVerilog bench](../sim/audio/anima_serial_timing_tb.sv) uses elapsed processing edges to check the public interface, with no reads of internal DUT state. It tests frame wrap, all bit/channel boundaries, reset without a clock edge, pin/event alignment and seeded reset offsets. Default seed is 2026; initial regression seeds remain 1, 42 and 2026. This bench validates timing only, not sample transport or five minutes of audio.
+
+The [focused runner](../scripts/run_serial_timing.py) supports Windows Vivado Simulator and native/WSL Verilator. From the root, with Python 3.12:
+
+```sh
+python scripts/run_serial_timing.py --lint
+python scripts/run_serial_timing.py --case phase
+python scripts/run_serial_timing.py --case clocks
+python scripts/run_serial_timing.py --case events
+python scripts/run_serial_timing.py --case all --simulator verilator --seed 2026
+```
+
+Verilator is the default simulator. Current increments use Verilator only; Vivado remains an explicit option for later investigation. If explicitly using Vivado, set --vivado-bin if its installation differs from the detected location. Use --waves with Vivado to record a waveform database. Generated logs/builds stay under ignored build/serial_timing/. The runner requires a unique TIMING_PASS marker as well as successful tool execution, so a simulator returning zero after a fatal assertion cannot falsely pass.
+
+**Component results, October 22:** Verilator Verilog-2001 lint passed. The checked-in implementation passed case all for seeds 1, 42 and 2026 in both Vivado Simulator and WSL Verilator, using the existing independent bench unchanged except for its introductory comment. Each run used eight directed frames plus four seeded reset sequences; observed edge totals were 28,439 / 27,284 / 27,817 respectively in each simulator. Checks cover phase advance/wrap, pin ratios, pre-edge enable/metadata timing, 64 SCLK rises and falls per frame, channel boundaries and asynchronous hard-reset masking. Per-seed simulation logs are under ignored build/serial_timing/{vivado,verilator}/simulate-seed-<seed>.log. These component runs are not the required five minutes of simulated audio. Touched-file UTF-8/no-BOM, LF, whitespace, Python parsing, Markdown structure and 74 local-file/heading links passed. At the commit boundary, repository checks and the Verilator-default lint/seed-2026 run passed. The Python regression result is recorded below; it is not fully passing.
+
+**Historical harness checks, October 17:** the unfinished starter compiled but failed its phase test as expected. A temporary reference passed seeds 1, 42 and 2026 in both simulators, and Vivado waveform recording worked. Four deliberately faulty variants were rejected: advance-by-two, wrong MCLK ratio, late capture enable and synchronous-only reset. Temporary reference sources were removed. These earlier results establish harness checks; the October 22 results above test the actual implementation.
+
+## Warm-reset controller
+
+Implemented October 22, 2026: [anima_warm_reset_controller.v](../rtl/audio/anima_warm_reset_controller.v) stores a qualified request until the next left boundary. Its pre-edge combinational application includes a fresh request on the boundary itself, coalesces further pending requests and clears pending on application. Hard reset clears pending and masks application asynchronously. The exact single-bit input/output contract is in [Planning & Design](planning.md#warm-reset-controller-interface).
+
+This component selects an edge; it does not reset the timing generator. The receiver component below now consumes warm-reset application and tests RX assembly/ID restart. Queues, scheduler and TX are not yet connected, so a complete system flush and stereo-output silence remain requirements rather than implemented system behavior. Button synchronization/debounce, watchdog request generation, diagnostics, cold qualification and stopped-clock supervision remain separate work.
+
+The independent [SystemVerilog bench](../sim/audio/anima_warm_reset_controller_tb.sv) instantiates the real timing block and assigns each request an absolute edge deadline based on elapsed edges. It checks the public interfaces without reading internal DUT state. A stand-in data register checks same-edge reset priority over ordinary work; it is not an audio source/sink or complete data-path model. Directed cases cover no-request operation, short off-boundary requests, repeated-request coalescing, requests on/just after/just before a boundary, pending plus a new boundary request, consecutive requested boundaries, hard reset while pending/application is visible and final drain. Seeded requests and hard resets add randomized timing coverage. The bench continuously checks that timing phase, serial pins and enables continue correctly across warm-reset application.
+
+Run with native/WSL Verilator; no Vivado command is used:
+
+```sh
+python scripts/run_warm_reset.py --lint
+python scripts/run_warm_reset.py --seed 2026
+```
+
+Default random duration is 16 frame units, in addition to directed checks; --frames changes this component stimulus duration. It does not represent an audio-duration acceptance test. The runner requires successful tool execution and exactly one WARM_RESET_PASS marker. Per-seed logs are under ignored build/warm_reset/verilator/simulate-seed-<seed>.log.
+
+**Actual results:** Verilog-2001 controller lint passed. Seeds 1, 42 and 2026 passed, each with 64,790 processing edges. Applied/coalesced/hard-reset-aborted counts respectively were 19/230/10, 21/218/8 and 19/234/11. The existing timing block is unchanged from [4b26b15](https://github.com/Rkycodes/ANIMA/commit/4b26b155ae086d1071c529e768a752250184ce47). Only focused controller checks were run after that commit; the Python model error recorded below remains unresolved. No full bypass, five-minute audio run, synthesis or hardware validation is established.
+
+## I2S receiver
+
+Implemented October 22, 2026: [anima_i2s_receiver.v](../rtl/audio/anima_i2s_receiver.v) captures MSB-first payload positions 1–24 into separate signed 24-bit L/R registers. It ignores the preceding-word tail and padding. On final right-bit capture edge E, it registers pair_complete, snapshots the unsigned 32-bit ID and increments the next ID modulo 2^32. The queue-side consumer samples the completed values and event on E+1. There is no ready input; an eventual full queue must reject a complete offer without pausing capture or its ID sequence. Exact representations and lifetime are in the [receiver contract](planning.md#receiver-block-contract).
+
+RX hard reset asynchronously clears assembly, ID and completion state; after release, collection waits for a left boundary. Its reset can stay asserted while serial timing runs, leaving cold qualification to the future supervisor. The shared warm-reset controller clears RX state at its boundary and starts fresh frame-zero collection in that same interval. This is tested component integration, not completed cold startup or a bypass top.
+
+The [receiver bench](../sim/audio/anima_i2s_receiver_tb.sv) supplies ADC data after modeled falling serial edges, then independently scores expected source L/R values and IDs at E+1. It uses the real timing/reset components and an admission witness, not an implemented FIFO. Directed vectors include zero, signed extremes, LSB-sensitive and distinct-channel patterns; later pairs are seeded random values. Nonzero tail/padding, held RX reset while clocks run, mid-frame reset release, warm reset around channel/payload/handoff boundaries, pending-offer hard-reset cancellation and queue-rejected offers are checked. A continuous 258-frame segment exercises the low-byte ID carry. One explicit test-only hierarchical force/release seeds the next-ID register to 0xfffffffe for bounded full-width rollover coverage; subsequent public pair IDs/data are independently scored. This is not a run of 2^32 frames and adds no production seed port or parameter.
+
+```sh
+python scripts/run_i2s_receiver.py --lint
+python scripts/run_i2s_receiver.py --seed 2026
+```
+
+The [Verilator-only runner](../scripts/run_i2s_receiver.py) defaults to 32 randomized frame units after directed cases, requires a unique I2S_RX_PASS marker and keeps logs under ignored build/i2s_receiver/verilator/simulate-seed-<seed>.log. **Actual results:** Verilog-2001 lint passed; all three seeds passed with these processing-edge / published-pair / admission-rejection / warm-reset counts: seed 1, 706631 / 324 / 8 / 27; seed 42, 706638 / 326 / 10 / 33; seed 2026, 706617 / 327 / 10 / 33. Each run covered one cancelled offer and one seeded 32-bit rollover. Rejections count witness decisions, not implemented hardware overflow counters. Clock/reset and existing model sources were preserved. No full repository/model rerun was performed in this component increment; the existing Python model error remains recorded below.
+
+No real RX queue, queue-overflow diagnostics, scheduler, transmitter, five-minute simulated audio, synthesized implementation or hardware audio result exists yet.
 
 ## Python preset and frame model
 
@@ -71,11 +137,15 @@ The workflow [.github/workflows/ci.yml](../.github/workflows/ci.yml) currently r
 | --- | --- |
 | Branch integration, October 15 | All fetched local/remote tips were ancestors of main after 36dd5d0; origin/main pushed. Existing branch names retained |
 | Repository checker, merged Python branch | Passed after incoming whitespace corrections; no model behavior change |
-| Python model regression | 20 tests passed with nested-directory command; behavioral cases only |
+| Python model regression, October 15 | 20 tests passed with nested-directory command; historical behavioral-model result |
+| Commit boundary, October 22 | Repository checker and timing lint/default Verilator simulation passed; Python model: 19 passed, one error in test_frame_10_retains_a_until_completion_while_frame_11_uses_b because PresetManager.end_frame lacks self. Model/test files match base c9a2c1c and were not changed in this increment |
 | Prior planning checkpoint | Repository and supplemental local-file/heading/UTF-8 checks passed; six diagram assets checked. Timing SVG rendered with sharp and visually inspected |
 | Vivado / device | 2026.1 SW 6511674 / IP 6504888; BASIC license detected; xc7a35tcpg236-1 recognized |
 | Clock configuration | In-memory Clocking Wizard 6.0 returned settings below; no synthesis or physical clock measurement |
-| Verilator availability | WSL Ubuntu /usr/bin/verilator reported 5.032, 2025-01-01, Debian 5.032-1; version query only |
+| Verilator availability | WSL Ubuntu /usr/bin/verilator previously reported 5.032, 2025-01-01, Debian 5.032-1; now used for component lint/regression as recorded below |
+| Serial timing, October 22 | Verilog-2001 lint and case all, seeds 1/42/2026, passed in both Vivado Simulator and WSL Verilator; timing component only |
+| Warm reset, October 22 | Verilator Verilog-2001 lint and seeds 1/42/2026 passed; real timing plus stand-in consumer, not complete audio integration |
+| I2S receiver, October 22 | Verilator lint and seeds 1/42/2026 passed; E+1 pair/data/ID scoreboard, real timing/reset, admission witness and explicit bounded rollover seed |
 | Mermaid rendering | Mermaid/mmdc unavailable; manually reviewed syntax and retained editable sources. No rendered-Mermaid verification claimed |
 
 Consolidation checks passed on October 15: repository formatting/local-file/heading links and diagram integrity; a valid checker fixture plus nine deliberate failure cases (broken heading/file/path, invalid UTF-8/LF, SVG, Mermaid header, metadata and missing required document); exact preservation of all 15 source-register rows. The Mermaid header check is not rendering. No five-minute audio simulation, synthesis, timing closure, board programming, analog capture or acoustic latency result exists.
@@ -105,11 +175,11 @@ Wizard configuration does not prove routed resources, output pads, setup/hold, j
 
 ## Tools and workflow
 
-Use Windows Vivado for clock investigation and eventual simulation, synthesis, implementation, timing and programming. Use Verilator for lint/regression once benches exist; Vivado Simulator directed checks complement it without duplicating the five-minute run by default. Current WSL use was a version query. If using separate Windows/WSL clones, synchronize commits and keep generated directories separate; report the same source revision for comparisons.
+Use Verilator for current lint and simulation increments. Windows Vivado remains available for later clock investigation, simulation when specifically needed, synthesis, implementation, timing and programming; routinely running both simulators is not required. Current WSL use includes Verilator lint and timing-component simulation on this checkout; Vivado Simulator runs on Windows. If using separate Windows/WSL clones, synchronize commits and keep generated directories separate; report the same source revision for comparisons.
 
 Synthesizable RTL uses Verilog-2001 (.v); SystemVerilog (.sv) may be used for verification. Audio models and host utilities use Python. Select/pin ESP32 board/framework/version before firmware; keep credentials out of Git. Pin model dependencies when introduced.
 
-No build command is advertised for missing RTL. Add source-controlled Tcl, source lists and reviewed XDC with the first real top; generate under ignored build/. Check exact hardware rather than downloaded guesses. Use synthetic impulses, tones, sweeps, silence and seeded noise for vectors.
+The focused timing runner compiles and simulates the implemented timing component. A complete bypass/build target still does not exist. Add source-controlled Tcl, source lists and reviewed XDC with the first real audio top; generate under ignored build/. Check exact hardware rather than downloaded guesses. Use synthetic impulses, tones, sweeps, silence and seeded noise for vectors.
 
 Keep main usable, use focused PRs and report actual validation. Obtain Robel's approval before each commit boundary; new commits use his configured identity while preserving collaborator authorship. Run appropriate checks at commit boundaries rather than after every prose edit. Shared top-level wiring needs one claimed integration owner per increment.
 
@@ -121,13 +191,17 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [planning.md](planning.md) / this document | Design requirements versus current evidence |
 | [diagrams/](diagrams) | Five editable Mermaid sources and timing SVG |
 | [config/project.json](../config/project.json) | Planning metadata; draft baud is not a frozen protocol |
-| [rtl/](../rtl) | Empty audio/dsp/control/display/common scaffold |
+| [rtl/](../rtl) | Serial timing, warm-reset controller and I2S receiver; remaining audio subsystems scaffold |
 | [model/](../model) | Reserved audio reference/bit-exact models |
 | [sim/fpga_control_logic/](../sim/fpga_control_logic) | Current Python model/tests |
+| [sim/audio/](../sim/audio) | Timing, warm-reset and ADC-source/receiver component benches |
 | [firmware/esp32/](../firmware/esp32) | Reserved firmware area |
 | [tools/serial_host/](../tools/serial_host) | Reserved PC UART diagnostics |
 | [hardware/](../hardware) | Reserved assets; live inventory is in Planning & Design |
 | [scripts/check_repo.py](../scripts/check_repo.py) | Repository checker |
+| [scripts/run_serial_timing.py](../scripts/run_serial_timing.py) | Focused timing lint/simulation runner; Verilator default |
+| [scripts/run_warm_reset.py](../scripts/run_warm_reset.py) | Focused Verilator-only warm-reset lint/simulation runner |
+| [scripts/run_i2s_receiver.py](../scripts/run_i2s_receiver.py) | Focused Verilator-only receiver lint/simulation runner |
 | [scripts/vivado/](../scripts/vivado) | Reserved build tooling |
 | [results/](../results) | Reserved measured/release evidence; no audio measurements |
 | [.github/](../.github) | CI and operational issue/PR templates, retained separately |
