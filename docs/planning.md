@@ -1,6 +1,6 @@
 # ANIMA — Planning & Design
 
-Design baseline: October 22, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
+Design baseline: October 23, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
 
 ## Contents
 
@@ -138,7 +138,7 @@ Pre-edge visibility is part of this interface. At a rising processing edge whose
 | 1808 | Right LSB capture; next left selection is 240 processing cycles away |
 | 2047 → 0 | Phase wrap; next left boundary follows |
 
-The staged timing bench checks counting first, then registered clocks, then enables/metadata, then all together. This is component verification, not completed bypass acceptance or the five-minute audio regression. RX-to-queue ingress will be a nonbackpressurable complete-pair event (accept or whole-pair overflow rejection); the stored queue head uses the selected stable valid/ready interface.
+The staged timing bench checks counting first, then registered clocks, then enables/metadata, then all together. This is component verification, not completed bypass acceptance or the five-minute audio regression. RX-to-queue ingress is a nonbackpressurable complete-pair event (accept or whole-pair overflow rejection); the stored queue head uses the selected stable valid/ready interface.
 
 ## Stereo bypass contract
 
@@ -198,6 +198,68 @@ Full RX [A, B] can dequeue A and enqueue complete C on the same edge → [B, C],
 
 TX can promote a waiting pair and accept eligible replacement on the same boundary without artificial backpressure. Empty waiting storage can accept expected data exactly on its deadline into current serialization without artificial silence. Never overwrite current output. For bypass, admit only data due for the next unfilled output slot to TX waiting; future pairs stay upstream, stale pairs transfer/discard, due data with reserved waiting slot is backpressured. Larger depths do not permit arbitrary future prefetch or change delay. Register/FSM organization remains code-local.
 
+### RX frame queue block contract
+
+The [RX frame queue](../rtl/audio/anima_rx_frame_queue.v) stores complete pairs before presenting them downstream; no empty-queue same-edge pass-through is selected. DEPTH is an integer build-time entry count, default 2, with only 1/2/4/8 supported. Storage entries are exactly 80 bits packed internally as frame_id[79:48], left[47:24], right[23:0]. Counter and pointer widths derive from DEPTH, including depth 1; unsupported depths cause an elaboration error.
+
+| Port | Direction / width / representation | Contract |
+| --- | --- | --- |
+| audio_clk / reset_n | Inputs, one bit each | Processing clock and active-low hard reset, with asynchronous assertion and externally synchronized release |
+| warm_reset_apply | Input, one bit | Shared synchronous flush, with priority over enqueue, dequeue and overflow |
+| pair_complete | Input, one bit | Nonbackpressurable receiver offer sampled on ingress edge Q = E+1 |
+| in_left / in_right | Inputs, signed 24 bits each | Complete offered stereo samples |
+| in_frame_id | Input, unsigned 32 bits | Offered pair identity; copied opaquely without renumbering or deadline decisions |
+| out_valid / out_ready | Output / input, one bit each | Stored head available / downstream acceptance on a processing rising edge |
+| out_left / out_right | Outputs, signed 24 bits each | Oldest stored pair; stable with out_valid while stalled |
+| out_frame_id | Output, unsigned 32 bits | Identity belonging to the presented samples |
+| overflow_event | Output, one bit, combinational | Visible before an edge rejecting an incoming pair: active and pair_complete and full and no actual same-edge dequeue |
+
+An offer accepted at Q first transfers downstream at Q+1 when ready; its head becomes visible after Q. With ready low, valid and all 80 bits remain stable until an actual transfer or reset flush. Full dequeue/enqueue retains occupancy and replaces the departing entry, including at depth 1. Full without a dequeue rejects only the incoming pair and emits overflow; it never overwrites the stalled head. Consecutive rejected offers generate an event on each rejecting edge. No queue input stalls or renumbers the receiver.
+
+Hard reset and warm flush empty the queue; no stale payload is visible or valid after either reset. Outputs are zero when invalid. Logical flush invalidates storage; it does not require clearing every memory bit. Both resets mask transfers and overflow while asserted. The separate diagnostic consumer will sample overflow_event on the rejection edge, increment its saturating counter and retain sticky fault evidence independently of audio flush. The queue does not implement that counter, LED, stall watchdog or an automatic overflow reset.
+
+### Frame scheduler block contract
+
+The scheduler owns TX waiting storage; implementation stays on feat/frame-scheduler. TX_WAIT_DEPTH is a build-time integer, default 1, legal 1/2/4/8. Under the selected next-unfilled-slot policy at most one pair may be reserved; larger settings do not enable future prefetch and require no additional physical entries in bypass. The waiting register holds two signed 24-bit samples; its unsigned 32-bit identity is implicit in the expected schedule counter.
+
+| Ports | Representation and timing |
+| --- | --- |
+| audio_clk / reset_n | Same processing clock; asynchronous hard-reset assertion, externally synchronized release |
+| warm_reset_apply / left_boundary_ce | One-bit pre-edge shared flush / boundary enables; flush wins |
+| in_valid / in_ready | One-bit pair handshake; all input data held until transfer or reset |
+| in_left / in_right / in_frame_id | Signed 24-bit samples and unsigned 32-bit identity, matching RX queue |
+| select_ce | One-bit pre-edge boundary strobe; TX must sample the whole selection on that edge, with no ready/backpressure |
+| select_real | One bit; selected payload is real audio, otherwise whole-pair zero |
+| select_left / select_right | Signed 24-bit selected samples, zero outside real selection; combinational transaction payload, not current serialized storage |
+| select_frame_id | Unsigned 32-bit due ID on a runtime boundary, zero otherwise; meaningful with select_real for real samples |
+| underflow_event / late_discard_event | One-bit pre-edge missing-runtime-pair / accepted-late-pair events for separate diagnostics |
+| ambiguous_id_event | One-bit stream-contract violation, not a sixth diagnostic counter; integration must assert its absence, never authorize this pair |
+| waiting_nonempty / waiting_progress | One-bit pre-edge occupancy / actual boundary promotion observations for the TX-waiting watchdog; excludes current serialization and empty-slot direct acceptance |
+
+First left boundary after hard reset starts capture interval zero and selects intentional silence without underflow. Subsequent boundaries select expected IDs 0, 1, ... modulo 2^32. A warm reset at a left boundary selects intentional zeros, empties waiting storage and starts fresh capture zero; the following boundary expects zero. The external cold supervisor must hold/reset the data path through qualification; it is not implemented by this block.
+
+Between boundaries, admit the expected ID when no pair is reserved; duplicates of a reserved ID remain backpressured. At a boundary, promote a reservation before deciding whether an incoming pair reserves the next slot. Compare incoming ID against that next unfilled admission ID: due can enter if space exists, late transfers/discards, future and exactly half-range stay upstream. Thus promotion can accept next-ID replacement, while an empty boundary accepts its due pair directly. A missed slot still advances the schedule; a pair arriving one clock later is discarded. No payload is replayed to catch up. Ambiguous input raises the violation signal; its presence must fail the integrating simulation assertion. Neither stale discard nor a future/ambiguous offer suppresses underflow for an unfilled deadline.
+
+Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction. The serializer and watchdogs are integrated in the core described below; retained-age proof remains pending; diagnostic storage is now connected as described below.
+
+### I2S transmitter block contract
+
+The [transmitter](../rtl/audio/anima_i2s_transmitter.v) owns the current serialized pair, separate from scheduler waiting storage. It has no valid/ready backpressure, queue, sample conversion, frame counter or tunable serial format.
+
+| Ports | Representation and timing |
+| --- | --- |
+| audio_clk / reset_n | Processing clock; asynchronous active-low hard-reset assertion and externally synchronized release |
+| warm_reset_apply | One-bit shared synchronous flush, qualified at the left boundary upstream; priority over selection/launch |
+| select_ce | One-bit pre-edge scheduler boundary transaction, asserted every active left boundary; never asserted elsewhere |
+| select_left / select_right | Signed 24-bit whole selected pair; scheduler supplies zero for startup, reset or missing data |
+| sclk_fall_ce | One-bit pre-edge launch enable from serial timing |
+| slot_bit / right_slot | Unsigned five-bit position 0–31 and one-bit channel, shared timing metadata |
+| dac_sdata | One-bit registered serial output; asynchronously zero on hard reset, otherwise changes only on authorized falling-edge launches or shared warm flush |
+
+Capture both samples together on select_ce. Current-pair registers remain unchanged while serializing, even if scheduler inputs change. Slot position 0 launches zero; positions 1–24 launch sample bits 23–0, left then right, on SCLK falling edges. Positions 25–31 and the following position 0 launch zero, including for negative samples. Hold serial output on all other processing edges, including SCLK rising/capture edges. The boundary capture and slot-zero launch can share an edge: no new sample bit is needed until the next falling edge, so nonblocking pair-register updates introduce no MSB delay.
+
+Warm application clears both current samples and data output on its boundary; shared timing keeps running. Hard reset clears samples/data immediately. Missing/extra selection strobes are interface violations, not a serializer retry or underflow policy; the scheduler owns the mandatory per-boundary real-or-zero selection. Cold qualification, physical pin constraints and clock-loss handling remain external. The first-build serial format is fixed here; extending widths/slots would require coordinated timing/RX/scheduler/TX and test changes.
+
 ### Frame IDs, deadlines and late data
 
 Advance ID for **every complete aligned pair**, including overflow rejection; preserve gaps. Cold-qualification ignored pairs consume no IDs. Audio reset flushes all data and restarts IDs **and playback schedule at zero**; controller reconnect does not. External reset epoch reporting is deferred.
@@ -224,6 +286,31 @@ Monitor each nonempty RX and TX-waiting queue independently during active operat
 
 Verify retained-frame age bound `(RX depth + TX-waiting depth + 2)` frame periods, at most 18 supported, far below 2^31. Clock loss flushes before numbering restarts. Capacity changes do not extend deadlines, add playback delay or correct sustained rate mismatch. Later-slot fallback needs coordinated schedule/late-policy/test revision, not automatic override.
 
+### Bypass core and progress watchdog interfaces
+
+The [bypass core](../rtl/audio/anima_bypass_core.v) connects serial timing, reset control, RX, complete-pair queue, scheduler-owned TX waiting storage, serializer and the [watchdogs](../rtl/audio/anima_audio_watchdogs.v). RX_DEPTH defaults to 2 and TX_WAIT_DEPTH to 1, both legal 1/2/4/8; existing component elaboration guards reject unsupported values. It takes an already-generated processing clock. No DSP, ADC pacing, asynchronous FIFO or UART/control dependency is introduced.
+
+| Core ports | Representation and meaning |
+| --- | --- |
+| audio_clk / reset_n | Processing clock and global audio active-low hard reset, asynchronous assertion and externally synchronized release; resets serial timing/data, not diagnostic storage |
+| data_reset_n | Separate one-bit active-low data qualification reset, externally synchronized release; ANDed with reset_n for data blocks, reset controller and watchdogs. Hold low during future cold qualification while reset_n allows serial clocks to run |
+| reset_request | Qualified one-bit audio-domain request; raw button conditioning and stopped-clock supervision remain upstream |
+| adc_sdata / dac_sdata | One-bit serial input / registered serial output |
+| mclk / sclk / lrck | Registered serial waveforms from fixed-ratio timing; unaffected by data reset or warm recovery |
+| warm_reset_apply / reset_pending | One-bit shared pre-edge flush / registered pending observation |
+| overflow_event / underflow_event / late_discard_event | Existing one-bit pre-edge diagnostic events |
+| stall_timeout_event | One-bit registered event, high for one processing cycle after a threshold edge; simultaneous RX/TX expiry emits one event |
+| ambiguous_id_event | One-bit stream violation indication for integration assertions; not an additional error counter |
+| frame_select_ce / frame_real / frame_id | One-bit selection transaction / real-sample flag and unsigned 32-bit selected identity; meaningful at the selection edge, not a frozen telemetry packet map |
+| diagnostic_reset_n / diagnostic_clear / recovered_clock_loss_event | Independent initialization reset / qualified clear / supervisor event, all one bit; detailed lifetime below |
+| underflow_count / overflow_count / late_discard_count / stall_timeout_count / recovered_clock_loss_count / fault_sticky | Five unsigned 32-bit counts and one-bit sticky fault level; unaffected by core audio reset paths |
+
+Each watchdog uses an unsigned 11-bit count and the fixed first-build threshold of 2048 processing edges. Count an edge only when that queue was nonempty before the edge and made no actual dequeue/promotion. The first such edge counts one; expiry is on the 2048th. Empty or actual progress clears that queue's timer; progress on the threshold edge wins. RX progress includes stale acceptance/discard. TX progress means promotion of a stored pair, not enqueue, current serialization or direct empty-slot selection. Hard reset or shared warm application clears both monitors with priority; startup/data reset leaves their queues empty or held reset.
+
+A threshold edge registers recovery_request and stall_timeout_event. The registered request is high until warm application; no second stall event occurs during that pending incident, even if the other queue later expires. The reset controller observes the request beginning on the following processing edge and applies the shared flush at the first subsequent left boundary. If expiry itself occurs on a left-boundary edge, recovery occurs at the next left boundary, not retroactively on the expiry edge. This registered staging avoids a combinational loop through reset-masked valid/ready. Clocks keep running, reset flushes all audio ownership and numbering, and fresh frame zero is eligible for the following output slot. Diagnostic consumers sample the registered stall event on its high cycle; their counters/LED must retain evidence independently of audio reset.
+
+Watchdog timeout is tied to the selected fixed 2048-cycle timing frame, not a runtime setting. Changing timing ratios requires coordinated review of timing, watchdog threshold/widths, budgets and tests. Board clock generation/qualification, stopped-clock detection, button conditioning and electrical constraints remain outside this core. Diagnostic storage is connected in the increment described below.
+
 ## Reset and recovery
 
 ### Warm audio reset
@@ -247,7 +334,7 @@ The [warm-reset controller](../rtl/audio/anima_warm_reset_controller.v) implemen
 
 An off-boundary request sets pending. On the earliest eligible left boundary, application wins and clears pending. A fresh request on that boundary applies immediately; pending plus another request on the same boundary produces one application, with no extra reset retained. Hard reset abandons pending work. Request sources must stop asserting after their event/application: a level held beyond application can request a later reset again; held-button suppression belongs upstream.
 
-Consumers sample warm_reset_apply on the processing rising edge and give it priority over ordinary data transfers. Do not register application one cycle after the boundary. Timing and diagnostic state must not be warm-reset by this signal. The controller does not itself flush RX/queues/TX, restart IDs, synchronize/debounce buttons, detect watchdog stalls, supervise stopped clocks or perform cold qualification; those integrations remain to be implemented.
+Consumers sample warm_reset_apply on the processing rising edge and give it priority over ordinary data transfers. Do not register application one cycle after the boundary. Timing and diagnostic state must not be warm-reset by this signal. The controller does not itself flush RX/queues/TX, restart IDs, synchronize/debounce buttons, detect watchdog stalls, supervise stopped clocks or perform cold qualification. The bypass core now wires shared data flush and watchdog requests; button conditioning, clock supervision and cold qualification are now implemented in the shell below; physical clock generation and hardware acceptance remain pending.
 
 
 ### Cold start and clock loss
@@ -262,6 +349,30 @@ ESP32/Wi-Fi/UART loss alone does **not** stop/reset audio or flush frames. Last 
 
 ## Diagnostics and user interfaces
 
+### Board-control shell and clock supervision
+
+[anima_bypass_control_shell.v](../rtl/audio/anima_bypass_control_shell.v) connects center-button warm reset, down-button diagnostic clear and led0 to the core's sticky fault level. It accepts ref_clk (nominal board 100 MHz), the externally generated audio_clk, initial_reset_n and MMCM LOCKED. mmcm_reset is a request to the external MMCM. This is a logical integration shell, not a complete physical clock generator or accepted board build. Core depth defaults/legal choices are unchanged. Clock loss does not depend on UART, Wi-Fi or software.
+
+[anima_button_event.v](../rtl/common/anima_button_event.v) synchronizes each active-high button through two ASYNC_REG stages, qualifies both press and release, and emits one audio-clock event per press. A held press cannot repeat. At startup or clock recovery, a button must first have a qualified release before arming; commands held during qualification are ignored. Warm reset does not reset this filter. Initial BUTTON_STABLE_CYCLES=983051 is a configurable approximately 10 ms target at the first-build processing rate, not a measured bounce requirement.
+
+[anima_clock_supervisor.v](../rtl/audio/anima_clock_supervisor.v) implements the selected LOCKED-plus-heartbeat policy. A raw LOCKED drop asynchronously invalidates timing/data, while a two-stage release pipeline retains reference-side visibility of a short drop and synchronizes qualification. A toggle every HEARTBEAT_CYCLES audio clocks crosses through two ASYNC_REG reference stages. At least two observed transitions with qualified LOCKED are required before timing release. Missing heartbeat or lock loss requests MMCM reset using the continuing reference clock. The detector checks liveness, not correct sample frequency, jitter or metastability margins.
+
+| Parameter | Initial value / units | Legal relationship / purpose |
+| --- | --- | --- |
+| BUTTON_STABLE_CYCLES | 983051 audio clocks | Positive integer; derived counter width, at least one bit |
+| HEARTBEAT_CYCLES | 64 audio clocks per toggle | Integer at least 4; first-build clocks are near 1:1, not arbitrary-frequency CDC |
+| TIMEOUT_REF_CYCLES | 1024 reference clocks without observed toggle | Integer at least 32 and at least 8 times HEARTBEAT_CYCLES; nominal 10.24 µs count plus synchronization/observation latency at 100 MHz |
+| MMCM_RESET_REF_CYCLES | 16 reference clocks | Positive integer; initial reset-hold target, not a tool-validated MMCM/reset constraint |
+| STARTUP_AUDIO_CYCLES | 98305085 audio clocks | Positive integer; ceil of approximately 98.3050847458 MHz × 1 second; initial qualification target subject to codec/hardware validation |
+
+All timer widths derive from these positive integer cycle counts; invalid relationships fail elaboration. The startup guard begins only after a first high LRCK has been observed, so codec waveforms are already running. Timing continues with zero output during guard; data release is synchronized after the full guard, and the core waits for its next whole left boundary. Every loss restarts guard. [anima_reset_sync.v](../rtl/common/anima_reset_sync.v) supplies asynchronous assertion/two-stage synchronized release for each receiving clock. Diagnostic initialization reset remains independent of recoverable audio resets.
+
+Loss evidence is latched in the reference domain after clocks have first qualified; absence of a clock before initial qualification does not fabricate a recovered-loss event. Repeated failures/qualification flaps coalesce into the same pending outage until aligned audio restart and diagnostic delivery are complete, as selected by Robel. A four-phase request/acknowledgement crosses stable one-bit levels; the audio-domain event is registered, and acknowledgement follows the edge on which diagnostics consumes it. The mailbox is not reset by audio loss: if audio stops with an unconsumed event high, that event remains until one resumed edge counts it. A pending acknowledgement is not closed while clocks/restart remain invalid. No sample words or diagnostic count buses are independently synchronized.
+
+led0 follows only fault_sticky. Previously counted faults remain visible during an outage. A new clock-loss episode is retained in reference-side loss_pending and becomes a counted/sticky diagnostic after qualified recovery delivery; this design does not promise an immediate new LED transition while audio is stopped. Button filtering and diagnostic storage do not clear loss_pending. Complete reference-clock/power loss still requires reinitialization.
+
+The authored [control XDC fragment](../hardware/constraints/anima_controls.xdc) maps ref_clk W5, center U18, down U17 and LED0 U16 from the existing SRC-008 pin plan and supplemental SRC-014 comparison. It is not a complete board top/constraint set: MMCM/buffers, generated clocks, audio pins, I/O delays, CDC/reset constraints and routed timing remain open implementation/acceptance work. No external code was copied. The default debounce/timeout/reset-hold values are configurable initial implementation targets; changing clock ratios requires revisiting the margins and guard arithmetic.
+
 ### Bypass diagnostics
 
 Selected October 15: five unsigned **32-bit saturating** counters, maximum 4294967295, plus one sticky LED.
@@ -275,6 +386,25 @@ Selected October 15: five unsigned **32-bit saturating** counters, maximum 42949
 | recovered_clock_loss | Detected loss episode completes qualified recovery |
 
 Any fault sets LED0; clock-loss detection latches evidence while reference is available for presentation after recovery. Preserve counts/LED across warm reset/recoverable loss; initialize zero at power-up/reconfiguration. Down-button diagnostic clear clears all five/LED without changing audio/IDs/clocks/queues. New event on clear wins: its counter one, LED on, others zero. Multiple classes per edge allowed; sum is not unique lost frames. Intentional startup/reset silence is not underflow. Diagnostics never block audio. Later UART/browser equivalents must retain semantics; wire map open.
+
+### Diagnostic storage block contract
+
+The [audio diagnostics](../rtl/audio/anima_audio_diagnostics.v) implement the selected five counters and sticky fault level. They consume events in audio_clk and have no audio-control outputs, ready/valid handshake or backpressure. Their storage reset is independent of audio timing/data resets.
+
+| Ports | Representation and meaning |
+| --- | --- |
+| audio_clk | Processing clock; counter/event sampling occurs on its rising edge |
+| diagnostic_reset_n | One-bit active-low initialization/reconfiguration reset with asynchronous assertion and externally synchronized release. Do not derive it from ordinary audio reset, data qualification reset or recoverable clock-lock loss |
+| diagnostic_clear | Qualified one-bit audio-domain clear action, normally one clock; future board button/UART sources require their own conditioning/arbitration |
+| underflow_event / overflow_event / late_discard_event | One bit each; existing pre-edge events, one increment per asserted sampling edge |
+| stall_timeout_event | One-bit registered watchdog event; counted on its high cycle, including when warm application happens on that same edge |
+| recovered_clock_loss_event | One-bit qualified audio-domain event after one detected loss episode completes recovery; reference-side evidence latch and acknowledged event delivery are implemented in the control shell above; the standalone core still expects a qualified event input |
+| underflow_count / overflow_count / late_discard_count / stall_timeout_count / recovered_clock_loss_count | Five independent unsigned 32-bit outputs, zero at initialization and saturating at 0xffffffff |
+| fault_sticky | One-bit registered fault evidence for eventual LED0; any of the five event classes sets it, retained until explicit clear or initialization |
+
+Initialization wins over clear/events. Otherwise a clear begins a new diagnostic interval: counters for new events on that edge become 1, others become 0, and fault_sticky becomes the OR of those events. Without clear, each asserted class increments its own counter unless already saturated; no event leaves that counter unchanged and the sticky level remains set. Consecutive high event cycles represent consecutive occurrences. Multiple classes can increment together; counts are not a unique lost-frame total. Fixed 32-bit widths are selected; no runtime width/format is introduced.
+
+The bypass core exposes these diagnostic ports and instantiates the storage separately from its audio resets. Downstream readers must later acquire a coherent status snapshot; these live outputs are not a selected UART/browser wire map. No recovered-clock event is fabricated by data reset, and the current module is not a clock-loss detector or recovery supervisor. Logical LED/button wiring, qualification and the authored control-pin fragment now exist in the shell above; physical implementation/timing validation remains pending.
 
 ### Browser, VGA and telemetry
 
@@ -421,7 +551,7 @@ Working fill-in list: retain prior worksheet IDs; selected bypass answers live a
 | H-06, C-02 | Legal instantiated clock resources; PFD/VCO/phase/duty/jitter units/budgets, I/O delays/constraints, routed timing/measurement | Robel; shared review | Configuration only; other evidence open |
 | C-03, C-04, I-01 | Control/VGA clocks, coherent endpoints/owners, reset/publication/activation/telemetry boundaries | Shared | Common audio domain selected; others open |
 | C-05, C-06 | Physical startup/settling/guard, stopped-clock pad/reset implementation | Robel; shared review | Digital policy selected; physical evidence missing |
-| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | RX component evidence recorded; queue/scheduling/retained-age proof pending |
+| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | Component scheduling and short core depth/reset/watchdog evidence recorded; full fault/retained-age and physical timing proof pending |
 | P-01 | An's explicit D-01/D-02 review/additional cases | An / Robel | |
 | P-02, N-01, N-03 | Snapshot validity, controller/FPGA validation, coefficient computation/reference, quantized stability/headroom | Shared; Robel numerics | Controlled-DSP slice |
 | P-03, P-05, P-06 | Activation readiness/boundary/delay, immutable cutoff, same-event C replacement vs B activation | Shared | Python call ordering is not hardware contract |
@@ -454,7 +584,7 @@ Stable IDs shared across both documents. Rows record title/publisher, URL, revis
 | SRC-005 | [CS4344/5/8 datasheet - Cirrus Logic](https://statics.cirrus.com/pubs/proDatasheet/CS4344-45-48_F2.pdf) | DS613F2, July 2013: timing p. 9; sections 4.1-4.2 / Table 1 p. 12; Figure 7 p. 13; sections 4.4-4.5 / Figure 11 pp. 15-16: DAC ratios, external SCLK and startup | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
 | SRC-006 | [7 Series Clocking Resources - AMD/Xilinx](https://docs.amd.com/v/u/en-US/ug472_7Series_Clocking) ([PDF](https://docs.amd.com/api/khub/documents/1kFbRqzm2fhwGy~cLQG2yA/content)) | UG472 v1.14: primitive ports pp. 70-71; LOCKED p. 83; Clocking Wizard p. 102 | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
 | SRC-007 | [Clocking Wizard: Configuring Output Clocks - AMD](https://docs.amd.com/r/en-US/pg065-clk-wiz/Configuring-Output-Clocks) | PG065 v6.0, April 20, 2022; named HTML section: requested/actual frequency and fractional-divider restrictions | Robel / 2026-10-15 register reconciliation | Consulted; tool configuration is separate from timing closure |
-| SRC-008 | [Basys 3 public schematic - Digilent](https://digilent.com/reference/_media/reference/programmable-logic/basys-3/basys-3-sch-public-rev-d.pdf) | Doc. 500-183, D.1, February 5, 2021; sheet 1 of 8, title block and PMOD, I/O; sheet 6, IC7C bank 34 / W5 and XC7A35T-1CPG236C: explicit revision matches Robel's reported board; connector/electrical review input. Reviewer: Robel; consulted 2026-10-08; D.1 clock/JA/button/LED netlist cross-checked on 2026-10-15 (sheet 6, IC9/IC7A/IC7C/IC7D); physical connection and electrical timing pending | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-008 | [Basys 3 public schematic - Digilent](https://digilent.com/reference/_media/reference/programmable-logic/basys-3/basys-3-sch-public-rev-d.pdf) | Doc. 500-183, D.1, February 5, 2021; sheet 1 of 8, title block and PMOD, I/O; sheet 6, IC7C bank 34 / W5 and XC7A35T-1CPG236C: explicit revision matches Robel's reported board; connector/electrical review input. Reviewer: Robel; consulted 2026-10-08; D.1 clock/JA/button/LED netlist cross-checked on 2026-10-15 (sheet 6, IC9/IC7A/IC7C/IC7D); physical connection and electrical timing pending | Robel / 2026-10-23 local D.1 review | Consulted; actual hardware/application validation pending |
 | SRC-009 | [Basys 3 online reference manual - Digilent](https://digilent.com/reference/programmable-logic/basys-3/reference-manual) | Revision and exact section unavailable: retrieval failed on 2026-10-08. Intended use: D.1 applicability and operating requirements. Reviewer: Robel; pending access, not used as evidence | Robel / 2026-10-15 register reconciliation | Pending access; not used as evidence |
 | SRC-010 | [ESP32 Pinout Reference - Last Minute Engineers](https://lastminuteengineers.com/esp32-pinout-reference/) | Unversioned HTML; sections ESP32 UART Pins and ESP32 Strapping Pins. Supplementary reading for UART/boot-pin questions only; not manufacturer evidence or confirmation of this DevKit V1's wiring. Reviewer: Robel; consulted 2026-10-08; exact module/board and primary-document cross-check pending | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
 | SRC-011 | [ESP32 DevKit pinout image - Reddit user submission](https://www.reddit.com/media?url=https%3A%2F%2Fpreview.redd.it%2Fa-better-pinout-diagram-for-esp32-devkit-development-board-v0-0u14t38nxeo21.png%3Fwidth%3D1200%26format%3Dpng%26auto%3Dwebp%26s%3D54d4999219ffd8a362a7a60208c17fd8176b8cac) | User-supplied image reference; author, revision and image content unverified because retrieval failed on 2026-10-08; no page/section available. Intended use: supplementary board identification. Reviewer: Robel; pending access, not used as wiring evidence | Robel / 2026-10-15 register reconciliation | Pending access; not used as evidence |
@@ -462,10 +592,13 @@ Stable IDs shared across both documents. Rows record title/publisher, URL, revis
 | SRC-013 | [RFC 7005 - IETF](https://www.rfc-editor.org/rfc/rfc7005.html) | September 2013; section 3 p. 4 and section 3.2 p. 5: playout deadlines and fixed-delay buffering. ANIMA use: conceptual comparison of late-data discard versus changing playback delay; RTP is not an ANIMA interface and this source does not establish audible superiority or select a frame policy. Reviewer: Robel; consulted 2026-10-08; analogy reviewed, ANIMA policy and audio evidence pending | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
 | SRC-014 | [Basys 3 master XDC - Digilent](https://github.com/Digilent/digilent-xdc/blob/c8644a9fe31cc803789643124545d56b3bef4600/Basys-3-Master.xdc) | master tip c8644a9fe31cc803789643124545d56b3bef4600 identified on 2026-10-15; consulted master file sections Clock signal, Buttons, LEDs and Pmod Header JA. Header calls out rev. B, so D.1 schematic SRC-008 is the pin-map authority. Reviewer: Robel / 2026-10-15; supplementary comparison only, no XDC/code copied | Robel / 2026-10-15 register reconciliation | Supplementary reference/analogy; applicability limits stated |
 | SRC-015 | [DSC1033 datasheet - Discera, hosted by Microchip](https://ww1.microchip.com/downloads/en/DeviceDoc/DSC1033_Datasheet.pdf) | MK-Q-B-P-D-031809-01-8; Specifications p. 2 and Ordering Information p. 8: oscillator conditions and code S=1 (+/-50 ppm), temperature code C. ANIMA use: tolerance of IC9 part named in D.1 schematic, not a fitted-part or frequency measurement | Robel / 2026-10-15 register reconciliation | Consulted; actual hardware/application validation pending |
+| SRC-016 | [Using Clock Modifying Blocks (MMCM and PLL) - AMD](https://docs.amd.com/r/2024.1-English/ug949-vivado-design-methodology/Using-Clock-Modifying-Blocks-MMCM-and-PLL) | UG949 2024.1 English, June 26, 2024; named HTML section, bullets on connecting RST to reliable-clock user logic and synchronizing LOCKED for synchronous use. ANIMA use: reference supervision/MMCM reset output and reset qualification; does not validate chosen timer defaults, primitive configuration or physical timing | Robel / 2026-10-23 | Consulted primary documentation; hardware/tool acceptance pending |
 
 No external code is reused. Any future reuse must record its original immutable commit/release, reused paths, license/SPDX and license URL; documentation references do not grant code licenses.
 
 Pending reading targets from An's notes, **not consulted evidence**: exact-board Espressif datasheet/strapping table and version-matched ESP-IDF UART guide; Cummings, CDC Design & Verification Techniques Using SystemVerilog (SNUG 2008); UART/framing tutorials and CRC/COBS/SLIP specifications if proposed. Add stable IDs, versions/locators and review records when consulted. No new claim here depends on those targets.
+
+Source recheck, October 23: SRC-016 was retrieved and consulted. SRC-014's current raw master file was retrieved ([manufacturer raw file](https://raw.githubusercontent.com/Digilent/digilent-xdc/master/Basys-3-Master.xdc), Clock signal / LEDs / Buttons, lines 6-7 / 26 / 57 / 61); its header still names rev. B, and the exact current master commit was not resolved. The previous pinned SRC-014 URL could not be retrieved on this recheck. The online SRC-008 fetch failed, but Robel supplied a local PDF: Downloads/basys-3-sch-public-rev-d.pdf, SHA-256 17641d0a8d5bd688cbb54ea088dcaa6a74b450de8a643abcb2b8f7cc6cebe465. Its eight sheets identify document 500-183, revision D.1, February 5, 2021. Text extraction and rendered-sheet inspection verified sheet 6 IC7A/IC7C: BTNC U18, BTND U17, LED0 U16 and CLK100MHZ W5; sheet 1 PMOD, I/O shows active-high buttons with pull-downs, and sheet 7 FPGA POWER connects banks 14/34 to VCC3V3. This replaces the fresh D.1 source-access limitation; board fit, complete constraints and electrical timing remain unvalidated. SRC-006 PDF/API re-fetches failed; prior consultation remains historical. Control constraints were authored from pin facts; no third-party RTL/XDC code was imported, so no reused-code version/license is introduced. Reviewer: Robel, 2026-10-23.
 
 ## Design history and contribution credit
 
