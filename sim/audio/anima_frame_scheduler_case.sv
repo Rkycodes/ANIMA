@@ -14,6 +14,7 @@ module anima_frame_scheduler_case #(parameter integer DEPTH=1)(output bit done=0
         .sclk_rise_ce(unused_rise), .sclk_fall_ce(unused_fall),
         .right_slot(unused_right), .slot_bit(unused_slot));
     wire in_ready, select_ce, select_real, underflow_event, late_discard_event, ambiguous_id_event;
+    wire waiting_nonempty, waiting_progress;
     wire signed [23:0] select_left, select_right;
     wire [31:0] select_frame_id;
     anima_frame_scheduler #(.TX_WAIT_DEPTH(DEPTH)) dut (.*);
@@ -57,6 +58,8 @@ module anima_frame_scheduler_case #(parameter integer DEPTH=1)(output bit done=0
                 direct_pairs++;
             end
         end
+        check(waiting_nonempty===(active && reservations.size()!=0),"waiting ownership observation");
+        check(waiting_progress===(boundary && reservations.size()!=0),"waiting promotion observation");
         check(in_ready===ready_expected,"acceptance/backpressure");
         check(select_ce===(reset_n && left_boundary_ce),"selection strobe");
         check(select_real===real_expected,"real/silence selection");

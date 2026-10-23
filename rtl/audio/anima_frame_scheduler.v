@@ -22,7 +22,9 @@ module anima_frame_scheduler #(
     output wire [31:0] select_frame_id,
     output wire underflow_event,
     output wire late_discard_event,
-    output wire ambiguous_id_event
+    output wire ambiguous_id_event,
+    output wire waiting_nonempty,
+    output wire waiting_progress
 );
     generate
         if ((TX_WAIT_DEPTH != 1) && (TX_WAIT_DEPTH != 2) &&
@@ -51,6 +53,9 @@ module anima_frame_scheduler #(
     wire transfer = in_valid && in_ready;
     wire direct = boundary && !waiting_valid && transfer && due;
 
+    // Observe waiting ownership, excluding current TX serialization.
+    assign waiting_nonempty = active && waiting_valid;
+    assign waiting_progress = boundary && waiting_valid;
     assign in_ready = active && started && !ambiguous && (late || (due && room));
     assign select_ce = reset_n && left_boundary_ce;
     assign select_real = boundary && (waiting_valid || direct);

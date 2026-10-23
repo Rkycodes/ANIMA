@@ -31,12 +31,14 @@ module anima_i2s_transmitter_tb;
     wire signed [23:0] chain_left, chain_right;
     wire [31:0] chain_id;
     wire underflow_event, late_discard_event, ambiguous_id_event;
+    wire unused_waiting_nonempty, unused_waiting_progress;
     anima_frame_scheduler scheduler (.audio_clk(audio_clk), .reset_n(reset_n),
         .warm_reset_apply(warm_reset_apply), .left_boundary_ce(left_boundary_ce),
         .in_valid(queue_valid), .in_ready(queue_ready), .in_left(queue_left),
         .in_right(queue_right), .in_frame_id(queue_id), .select_ce(chain_select_ce),
         .select_real(chain_real), .select_left(chain_left), .select_right(chain_right),
-        .select_frame_id(chain_id), .*);
+        .select_frame_id(chain_id), .waiting_nonempty(unused_waiting_nonempty),
+        .waiting_progress(unused_waiting_progress), .*);
     wire chain_sdata;
     anima_i2s_transmitter chain_tx (.audio_clk(audio_clk), .reset_n(reset_n),
         .warm_reset_apply(warm_reset_apply), .select_ce(chain_select_ce),

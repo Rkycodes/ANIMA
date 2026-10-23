@@ -234,12 +234,13 @@ The scheduler owns TX waiting storage; implementation stays on feat/frame-schedu
 | select_frame_id | Unsigned 32-bit due ID on a runtime boundary, zero otherwise; meaningful with select_real for real samples |
 | underflow_event / late_discard_event | One-bit pre-edge missing-runtime-pair / accepted-late-pair events for separate diagnostics |
 | ambiguous_id_event | One-bit stream-contract violation, not a sixth diagnostic counter; integration must assert its absence, never authorize this pair |
+| waiting_nonempty / waiting_progress | One-bit pre-edge occupancy / actual boundary promotion observations for the TX-waiting watchdog; excludes current serialization and empty-slot direct acceptance |
 
 First left boundary after hard reset starts capture interval zero and selects intentional silence without underflow. Subsequent boundaries select expected IDs 0, 1, ... modulo 2^32. A warm reset at a left boundary selects intentional zeros, empties waiting storage and starts fresh capture zero; the following boundary expects zero. The external cold supervisor must hold/reset the data path through qualification; it is not implemented by this block.
 
 Between boundaries, admit the expected ID when no pair is reserved; duplicates of a reserved ID remain backpressured. At a boundary, promote a reservation before deciding whether an incoming pair reserves the next slot. Compare incoming ID against that next unfilled admission ID: due can enter if space exists, late transfers/discards, future and exactly half-range stay upstream. Thus promotion can accept next-ID replacement, while an empty boundary accepts its due pair directly. A missed slot still advances the schedule; a pair arriving one clock later is discarded. No payload is replayed to catch up. Ambiguous input raises the violation signal; its presence must fail the integrating simulation assertion. Neither stale discard nor a future/ambiguous offer suppresses underflow for an unfilled deadline.
 
-Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction; that serializer, RX/TX watchdog integration, retained-age proof and diagnostic counters remain separate work.
+Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction. The serializer and watchdogs are integrated in the core described below; retained-age proof and diagnostic counters remain pending.
 
 ### I2S transmitter block contract
 
@@ -285,6 +286,29 @@ Monitor each nonempty RX and TX-waiting queue independently during active operat
 
 Verify retained-frame age bound `(RX depth + TX-waiting depth + 2)` frame periods, at most 18 supported, far below 2^31. Clock loss flushes before numbering restarts. Capacity changes do not extend deadlines, add playback delay or correct sustained rate mismatch. Later-slot fallback needs coordinated schedule/late-policy/test revision, not automatic override.
 
+### Bypass core and progress watchdog interfaces
+
+The [bypass core](../rtl/audio/anima_bypass_core.v) connects serial timing, reset control, RX, complete-pair queue, scheduler-owned TX waiting storage, serializer and the [watchdogs](../rtl/audio/anima_audio_watchdogs.v). RX_DEPTH defaults to 2 and TX_WAIT_DEPTH to 1, both legal 1/2/4/8; existing component elaboration guards reject unsupported values. It takes an already-generated processing clock. No DSP, ADC pacing, asynchronous FIFO or UART/control dependency is introduced.
+
+| Core ports | Representation and meaning |
+| --- | --- |
+| audio_clk / reset_n | Processing clock and global active-low hard reset, asynchronous assertion and externally synchronized release; global reset resets serial timing too |
+| data_reset_n | Separate one-bit active-low data qualification reset, externally synchronized release; ANDed with reset_n for data blocks, reset controller and watchdogs. Hold low during future cold qualification while reset_n allows serial clocks to run |
+| reset_request | Qualified one-bit audio-domain request; raw button conditioning and stopped-clock supervision remain upstream |
+| adc_sdata / dac_sdata | One-bit serial input / registered serial output |
+| mclk / sclk / lrck | Registered serial waveforms from fixed-ratio timing; unaffected by data reset or warm recovery |
+| warm_reset_apply / reset_pending | One-bit shared pre-edge flush / registered pending observation |
+| overflow_event / underflow_event / late_discard_event | Existing one-bit pre-edge diagnostic events |
+| stall_timeout_event | One-bit registered event, high for one processing cycle after a threshold edge; simultaneous RX/TX expiry emits one event |
+| ambiguous_id_event | One-bit stream violation indication for integration assertions; not an additional error counter |
+| frame_select_ce / frame_real / frame_id | One-bit selection transaction / real-sample flag and unsigned 32-bit selected identity; meaningful at the selection edge, not a frozen telemetry packet map |
+
+Each watchdog uses an unsigned 11-bit count and the fixed first-build threshold of 2048 processing edges. Count an edge only when that queue was nonempty before the edge and made no actual dequeue/promotion. The first such edge counts one; expiry is on the 2048th. Empty or actual progress clears that queue's timer; progress on the threshold edge wins. RX progress includes stale acceptance/discard. TX progress means promotion of a stored pair, not enqueue, current serialization or direct empty-slot selection. Hard reset or shared warm application clears both monitors with priority; startup/data reset leaves their queues empty or held reset.
+
+A threshold edge registers recovery_request and stall_timeout_event. The registered request is high until warm application; no second stall event occurs during that pending incident, even if the other queue later expires. The reset controller observes the request beginning on the following processing edge and applies the shared flush at the first subsequent left boundary. If expiry itself occurs on a left-boundary edge, recovery occurs at the next left boundary, not retroactively on the expiry edge. This registered staging avoids a combinational loop through reset-masked valid/ready. Clocks keep running, reset flushes all audio ownership and numbering, and fresh frame zero is eligible for the following output slot. Diagnostic consumers sample the registered stall event on its high cycle; their counters/LED must retain evidence independently of audio reset.
+
+Watchdog timeout is tied to the selected fixed 2048-cycle timing frame, not a runtime setting. Changing timing ratios requires coordinated review of timing, watchdog threshold/widths, budgets and tests. Board clock generation/qualification, stopped-clock detection, diagnostics storage/button conditioning and electrical constraints are outside this core increment.
+
 ## Reset and recovery
 
 ### Warm audio reset
@@ -308,7 +332,7 @@ The [warm-reset controller](../rtl/audio/anima_warm_reset_controller.v) implemen
 
 An off-boundary request sets pending. On the earliest eligible left boundary, application wins and clears pending. A fresh request on that boundary applies immediately; pending plus another request on the same boundary produces one application, with no extra reset retained. Hard reset abandons pending work. Request sources must stop asserting after their event/application: a level held beyond application can request a later reset again; held-button suppression belongs upstream.
 
-Consumers sample warm_reset_apply on the processing rising edge and give it priority over ordinary data transfers. Do not register application one cycle after the boundary. Timing and diagnostic state must not be warm-reset by this signal. The controller does not itself flush RX/queues/TX, restart IDs, synchronize/debounce buttons, detect watchdog stalls, supervise stopped clocks or perform cold qualification; those integrations remain to be implemented.
+Consumers sample warm_reset_apply on the processing rising edge and give it priority over ordinary data transfers. Do not register application one cycle after the boundary. Timing and diagnostic state must not be warm-reset by this signal. The controller does not itself flush RX/queues/TX, restart IDs, synchronize/debounce buttons, detect watchdog stalls, supervise stopped clocks or perform cold qualification. The bypass core now wires shared data flush and watchdog requests; button conditioning, clock supervision and cold qualification remain pending.
 
 
 ### Cold start and clock loss
@@ -482,7 +506,7 @@ Working fill-in list: retain prior worksheet IDs; selected bypass answers live a
 | H-06, C-02 | Legal instantiated clock resources; PFD/VCO/phase/duty/jitter units/budgets, I/O delays/constraints, routed timing/measurement | Robel; shared review | Configuration only; other evidence open |
 | C-03, C-04, I-01 | Control/VGA clocks, coherent endpoints/owners, reset/publication/activation/telemetry boundaries | Shared | Common audio domain selected; others open |
 | C-05, C-06 | Physical startup/settling/guard, stopped-clock pad/reset implementation | Robel; shared review | Digital policy selected; physical evidence missing |
-| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | RX/queue component evidence recorded; scheduling/retained-age proof pending |
+| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | Component scheduling and short core depth/reset/watchdog evidence recorded; full fault/retained-age and physical timing proof pending |
 | P-01 | An's explicit D-01/D-02 review/additional cases | An / Robel | |
 | P-02, N-01, N-03 | Snapshot validity, controller/FPGA validation, coefficient computation/reference, quantized stability/headroom | Shared; Robel numerics | Controlled-DSP slice |
 | P-03, P-05, P-06 | Activation readiness/boundary/delay, immutable cutoff, same-event C replacement vs B activation | Shared | Python call ordering is not hardware contract |

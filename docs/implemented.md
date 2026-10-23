@@ -11,6 +11,7 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 - [RX frame queue](#rx-frame-queue)
 - [Frame scheduler](#frame-scheduler)
 - [I2S transmitter](#i2s-transmitter)
+- [Bypass core and watchdogs](#bypass-core-and-watchdogs)
 - [Python preset and frame model](#python-preset-and-frame-model)
 - [Reproduce current checks](#reproduce-current-checks)
 - [Checks actually performed](#checks-actually-performed)
@@ -28,12 +29,13 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 | Repository tooling | Standard-library checker and GitHub Actions repository-check job | Hosted CI does not run model tests, RTL simulation or Vivado |
 | Vivado investigation | Device/version/license query and in-memory Clocking Wizard probe | No synthesis, implementation, routed timing or audio executable |
 | Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
-| Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | No sample transport, bypass top, codec wrapper or XDC |
-| Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX/queue reset application is tested below; TX flush, button conditioning, diagnostics and clock supervision not integrated |
+| Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | Integrated processing-clock core below; no board clock/pad wrapper or XDC |
+| Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | Core RX/queue/scheduler/TX flush below; button conditioning, diagnostic storage and clock supervision remain pending |
 | I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue and short DAC-side component-chain checks below; no cold supervisor or physical ADC validation |
-| RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Overflow event only; no fault counters/LED, watchdog, TX or hardware timing evidence |
-| Frame scheduler RTL | Expected-ID selection and owned next-due waiting register | Component validation and short TX chain below; no watchdog, cold supervisor or accepted bypass build |
+| RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Core watchdog/recovery integration below; no fault counters/LED or hardware timing evidence |
+| Frame scheduler RTL | Expected-ID selection and owned next-due waiting register | Waiting-state watchdog observations and core integration below; no cold supervisor or accepted board bypass build |
 | I2S transmitter RTL | Captures scheduler-selected L/R and serializes 24-bit I2S with zero padding | Component/chain simulation described below; no board build or hardware acceptance |
+| Bypass core / watchdog RTL | Processing-clock core and independent 2048-cycle RX/TX progress monitors | Functional simulation only; no clock generator, cold supervisor, fault counters, pad wrapper or hardware acceptance |
 | Firmware / host UART | Directory scaffold only | No firmware or serial utility |
 
 Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
@@ -66,7 +68,7 @@ Verilator is the default simulator. Current increments use Verilator only; Vivad
 
 Implemented October 22, 2026: [anima_warm_reset_controller.v](../rtl/audio/anima_warm_reset_controller.v) stores a qualified request until the next left boundary. Its pre-edge combinational application includes a fresh request on the boundary itself, coalesces further pending requests and clears pending on application. Hard reset clears pending and masks application asynchronously. The exact single-bit input/output contract is in [Planning & Design](planning.md#warm-reset-controller-interface).
 
-This component selects an edge; it does not reset the timing generator. The receiver component below now consumes warm-reset application and tests RX assembly/ID restart. The RX queue now also consumes that reset in the component integration test below. Scheduler and TX remain unimplemented, so complete system flush and stereo-output silence are not established. Button synchronization/debounce, watchdog request generation, diagnostics, cold qualification and stopped-clock supervision remain separate work.
+This component selects an edge; it does not reset the timing generator. The receiver component below now consumes warm-reset application and tests RX assembly/ID restart. The RX queue now also consumes that reset in the component integration test below. Scheduler/TX and shared core flush are now implemented and checked in the later sections. Button synchronization/debounce, diagnostic storage, cold qualification and stopped-clock supervision remain pending.
 
 The independent [SystemVerilog bench](../sim/audio/anima_warm_reset_controller_tb.sv) instantiates the real timing block and assigns each request an absolute edge deadline based on elapsed edges. It checks the public interfaces without reading internal DUT state. A stand-in data register checks same-edge reset priority over ordinary work; it is not an audio source/sink or complete data-path model. Directed cases cover no-request operation, short off-boundary requests, repeated-request coalescing, requests on/just after/just before a boundary, pending plus a new boundary request, consecutive requested boundaries, hard reset while pending/application is visible and final drain. Seeded requests and hard resets add randomized timing coverage. The bench continuously checks that timing phase, serial pins and enables continue correctly across warm-reset application.
 
@@ -96,7 +98,7 @@ python scripts/run_i2s_receiver.py --seed 2026
 
 The [Verilator-only runner](../scripts/run_i2s_receiver.py) defaults to 32 randomized frame units after directed cases, requires a unique I2S_RX_PASS marker and keeps logs under ignored build/i2s_receiver/verilator/simulate-seed-<seed>.log. **Actual results:** Verilog-2001 lint passed; all three seeds passed with these processing-edge / published-pair / admission-rejection / warm-reset counts: seed 1, 706631 / 324 / 8 / 27; seed 42, 706638 / 326 / 10 / 33; seed 2026, 706617 / 327 / 10 / 33. Each run covered one cancelled offer and one seeded 32-bit rollover. Rejections count witness decisions, not implemented hardware overflow counters. Clock/reset and existing model sources were preserved. No full repository/model rerun was performed in this component increment; the existing Python model error remains recorded below.
 
-The RX queue is now implemented and tested below. Queue-overflow counters/LED, scheduler, transmitter, five-minute simulated audio, synthesized implementation and hardware audio results remain pending.
+The RX queue is now implemented and tested below. Scheduler/transmitter/core integration follows below. Queue-overflow counters/LED, five-minute simulated audio, synthesized implementation and hardware audio results remain pending.
 
 ## RX frame queue
 
@@ -138,7 +140,7 @@ Implemented October 23: [anima_i2s_transmitter.v](../rtl/audio/anima_i2s_transmi
 
 The [testbench](../sim/audio/anima_i2s_transmitter_tb.sv) checks a directly driven transmitter while changing its selection bus every processing clock. An independent elapsed-edge oracle checks every output-bit launch, rising-edge capture, intervening hold cycle, channel position and serial clock waveform. It also connects the real timing, warm-reset controller, ADC receiver, RX queue, scheduler and a second TX. A behavioral ADC supplies signed extrema, zero, alternating bits and asymmetric frame/channel patterns, with arbitrary tail/padding bits. A DAC-side decoder reconstructs actual output-pin samples and compares whole pairs against source-derived next-slot expectations, including schedule IDs. It does not feed TX output back into the expected source.
 
-Directed tests cover asynchronous hard reset during right payload and padding, off-boundary/coalesced reset requests, same-boundary application and intentional startup/reset zeros. Randomized requests run for 96 frame units, followed by completion of the current interval and two complete frames. Every pair in those checked slots is decoded, including intentional silence. Acquisition continues during the final two checked output frames, so a newly captured pair can remain buffered when simulation ends; this does not establish final drain for full bypass acceptance. This is a short behavioral component-chain regression, not a 300-second acceptance run or a board-ready top-level design. Five-minute regression, watchdogs/counters, cold qualification, physical clock supervision, I/O constraints and board integration remain outstanding.
+Directed tests cover asynchronous hard reset during right payload and padding, off-boundary/coalesced reset requests, same-boundary application and intentional startup/reset zeros. Randomized requests run for 96 frame units, followed by completion of the current interval and two complete frames. Every pair in those checked slots is decoded, including intentional silence. Acquisition continues during the final two checked output frames, so a newly captured pair can remain buffered when simulation ends; this does not establish final drain for full bypass acceptance. This is a short behavioral component-chain regression, not a 300-second acceptance run or a board-ready top-level design. Watchdog integration is covered below. Five-minute regression, diagnostic counters, cold qualification, physical clock supervision, I/O constraints and board integration remain outstanding.
 
 ```sh
 python scripts/run_i2s_transmitter.py --lint
@@ -146,6 +148,23 @@ python scripts/run_i2s_transmitter.py --seed 2026
 ```
 
 The [runner](../scripts/run_i2s_transmitter.py) uses Verilator only, requires a unique pass marker and stores logs/builds under ignored build/i2s_transmitter/. **Actual results:** Verilog-2001 lint passed without waivers. Seeds 1/42/2026 each passed 212296 processing edges, reconstructing 103 stereo pairs from each transmitter (standalone and connected chain), with three asynchronous hard resets per run. Warm-reset applications were 27/22/19 respectively. The initial run reached the end with bit/pair checks passing but failed an overly high normal-frame coverage threshold; the test-only threshold was corrected because intentional warm-reset slots are excluded from that normal-frame count. All three results above use the corrected bench; serializer RTL was unchanged. The six touched files passed UTF-8/no-BOM, LF/whitespace and Python parsing checks; 114 local-file/heading links passed. At the authorized TX commit boundary, repository checks, TX lint and all three seeded TX/component-chain regressions passed again. The unchanged Python model suite reported 19 passing tests and the previously recorded end_frame signature error; no model files were changed. No synthesis, routed timing, programmed FPGA or hardware audio result is claimed.
+
+## Bypass core and watchdogs
+
+Implemented October 23: [anima_bypass_core.v](../rtl/audio/anima_bypass_core.v) wires timing, reset control, receiver, RX queue, scheduler and transmitter in production RTL. It accepts a processing clock, global reset and separate data qualification reset. Serial clocks run during data reset and warm recovery. No test stall controls, DSP or control-interface dependency are added. RX_DEPTH/TX_WAIT_DEPTH retain defaults 2/1 and legal depths 1/2/4/8. [Interface and exact edge rules](planning.md#bypass-core-and-progress-watchdog-interfaces).
+
+[anima_audio_watchdogs.v](../rtl/audio/anima_audio_watchdogs.v) maintains separate unsigned 11-bit RX/TX no-progress timers. RX observes actual accepted head transfers, including stale discard. TX observes scheduler waiting occupancy and actual promotion through two added one-bit observation outputs; current serialization and direct empty-slot selection are excluded. The first pre-edge nonempty/no-progress observation counts one, and the 2048th registers one event/request. Progress or empty on the threshold edge prevents expiry. Requests coalesce until shared warm reset; simultaneous expiry emits one event. Registered request staging avoids reset/handshake combinational feedback. Diagnostic storage/LED is still separate future work.
+
+The [watchdog bench](../sim/audio/anima_audio_watchdogs_tb.sv) uses integer elapsed-age reference counters, with no DUT-state reads. Directed checks cover each timeout alone, simultaneous expiry, progress/empty on the threshold edge, reset on expiry, hard reset of pending recovery and suppression of repeated events; 10000 randomized monitor cycles follow. The [recovery bench](../sim/audio/anima_bypass_recovery_tb.sv) holds data reset while timing runs, releases between boundaries, then injects an RX-only stall before first reservation and a TX-promotion stall after a complete pair enters waiting storage. It forces only the scheduler's internal started state for fault injection, then releases that force before the shared reset edge. Public clock/event/selection observations verify one pending request and boundary application per incident, fresh frame IDs 0/1 after each recovery and no serial-clock reset. This is an explicitly bounded fault injection, not a production stall input or proof against arbitrary corruption.
+
+The [core bench](../sim/audio/anima_bypass_core_tb.sv) adapts the independent ADC/DAC oracle from the TX bench and instantiates all 16 RX/TX depth combinations. Every core's serial bits, clocks, boundary selection and expected frame IDs are checked against elapsed-edge/source-derived expectations; normal operation also requires no overflow, underflow, late-discard, ambiguous-ID or timeout events. Known signed patterns and arbitrary ADC padding, 96 randomized-request frame units, directed resets and two final output frames remain the short serial regression. Reference clock edges use behavioral testbench time steps, not an assertion of the first-build physical clock frequency. Acquisition continues at test end, so the separate 300-second acceptance test still needs a finite scoring horizon/final drain.
+
+```sh
+python scripts/run_bypass_core.py --lint
+python scripts/run_bypass_core.py --seed 2026
+```
+
+[run_bypass_core.py](../scripts/run_bypass_core.py) uses Verilator only and saves logs under ignored build/bypass_core/. Lint passed for all 16 legal configurations. **Actual results:** final seeds 1/42/2026 each passed 212296 processing edges across all 16 depth configurations, checking 103 stereo pairs per configuration against source-derived expected bits; the reference configuration also reconstructs the complete DAC-side words. The watchdog reference passed 32535 test edges per seed, including five directed incidents and 10000 randomized monitor cycles. Each core-recovery run passed 20513 edges with two timeout incidents, two boundary applications, four verified fresh playback IDs and zero overflows. Warm applications in the normal depth matrix were 27/22/19, with three global hard resets per seed. No warnings were waived. Scheduler observation-output compatibility passed legal-depth lint and seed 2026 at all four depths, including the negative half-range assertion test. Existing TX standalone/connected-chain compatibility passed seed 2026 (212296 edges, 103 decoded pairs per transmitter, 19 warm applications and three hard resets). The 12 touched files passed UTF-8/no-BOM, LF/whitespace and Python parsing checks; 128 local-file/heading links passed. At the authorized core/watchdog commit boundary, the repository checker, 16-depth lint and three seeded core/watchdog/recovery suites passed again. The unchanged Python model reported 19 passing tests and the known end_frame signature error; no model files were changed. No 300-second acceptance, synthesis, routed timing, programmed FPGA or hardware audio validation is established.
 
 ## Python preset and frame model
 
@@ -235,7 +254,7 @@ Use Verilator for current lint and simulation increments. Windows Vivado remains
 
 Synthesizable RTL uses Verilog-2001 (.v); SystemVerilog (.sv) may be used for verification. Audio models and host utilities use Python. Select/pin ESP32 board/framework/version before firmware; keep credentials out of Git. Pin model dependencies when introduced.
 
-The focused timing runner compiles and simulates the implemented timing component. A complete bypass/build target still does not exist. Add source-controlled Tcl, source lists and reviewed XDC with the first real audio top; generate under ignored build/. Check exact hardware rather than downloaded guesses. Use synthetic impulses, tones, sweeps, silence and seeded noise for vectors.
+The focused timing runner compiles and simulates the implemented timing component. A processing-clock bypass core and reproducible Verilator source list now exist; a board build target is still missing. Add source-controlled Tcl and reviewed XDC with the board-level audio top; generate under ignored build/. Check exact hardware rather than downloaded guesses. Use synthetic impulses, tones, sweeps, silence and seeded noise for vectors.
 
 Keep main usable, use focused PRs and report actual validation. Obtain Robel's approval before each commit boundary; new commits use his configured identity while preserving collaborator authorship. Run appropriate checks at commit boundaries rather than after every prose edit. Shared top-level wiring needs one claimed integration owner per increment.
 
@@ -247,10 +266,10 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [planning.md](planning.md) / this document | Design requirements versus current evidence |
 | [diagrams/](diagrams) | Five editable Mermaid sources and timing SVG |
 | [config/project.json](../config/project.json) | Planning metadata; draft baud is not a frozen protocol |
-| [rtl/](../rtl) | Serial timing, warm-reset controller, I2S receiver, RX frame queue, frame scheduler and I2S transmitter; board integration and DSP remain pending |
+| [rtl/](../rtl) | Timing, reset control, RX/queue/scheduler/TX, bypass core and progress watchdogs; board integration, diagnostics and DSP remain pending |
 | [model/](../model) | Reserved audio reference/bit-exact models |
 | [sim/fpga_control_logic/](../sim/fpga_control_logic) | Current Python model/tests |
-| [sim/audio/](../sim/audio) | Timing/reset/receiver benches, queue depth cases, scheduler cases and standalone/connected TX checks |
+| [sim/audio/](../sim/audio) | Audio component benches, 16-depth core checks, watchdog reference and injected recovery checks |
 | [firmware/esp32/](../firmware/esp32) | Reserved firmware area |
 | [tools/serial_host/](../tools/serial_host) | Reserved PC UART diagnostics |
 | [hardware/](../hardware) | Reserved assets; live inventory is in Planning & Design |
@@ -261,6 +280,7 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [scripts/run_rx_frame_queue.py](../scripts/run_rx_frame_queue.py) | Verilator-only queue depths and real receiver integration runner |
 | [scripts/run_frame_scheduler.py](../scripts/run_frame_scheduler.py) | Verilator-only scheduler depth/seed/invalid-ID runner |
 | [scripts/run_i2s_transmitter.py](../scripts/run_i2s_transmitter.py) | Verilator-only TX and short audio-component-chain runner |
+| [scripts/run_bypass_core.py](../scripts/run_bypass_core.py) | Verilator-only bypass depth matrix, watchdog thresholds and recovery runner |
 | [scripts/vivado/](../scripts/vivado) | Reserved build tooling |
 | [results/](../results) | Reserved measured/release evidence; no audio measurements |
 | [.github/](../.github) | CI and operational issue/PR templates, retained separately |
@@ -269,6 +289,6 @@ Former folder indexes, duplicate contract files and learning-note copies are fol
 
 ## Evidence still missing
 
-First audio milestone needs actual codec/JP1/electrical checks, reviewed clock/pad/reset realization and constraints, bypass RTL/benches, Verilator deterministic/random regressions including 300 seconds simulated audio, Vivado directed checks, synthesis/routed timing and physical serial/audio measurements. Analog/acoustic setup, tolerances and hard latency limit remain open; **5 ms is a goal**.
+First audio milestone still needs diagnostic counters/button qualification, actual codec/JP1/electrical checks, board clock/reset supervision and constraints, broader fault/retained-age verification, 300 seconds simulated audio with final drain, synthesis/routed timing and physical serial/audio measurements. The processing-clock bypass core and short component/integration benches exist; their results are above. Vivado directed investigation remains available when requested or needed. Analog/acoustic setup, tolerances and hard latency limit remain open; **5 ms is a goal**.
 
 No working audio, DSP, deployed browser/VGA, firmware, synthesized design or hardware acceptance is claimed. Next: [codec → clock/reset → frame contract → bypass acceptance](planning.md#ownership-and-delivery), with An's UART/shadow proposal in parallel.
