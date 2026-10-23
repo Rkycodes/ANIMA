@@ -33,6 +33,18 @@ module anima_i2s_receiver_tb;
         .adc_sdata(adc_sdata), .left_sample(left_sample), .right_sample(right_sample),
         .frame_id(frame_id), .pair_complete(pair_complete));
 
+`ifdef ANIMA_RX_QUEUE_TEST
+    wire [3:0] queue_cases_done;
+    anima_rx_frame_queue_tb #(.DEPTH(1)) queue_depth_1 (.done(queue_cases_done[0]));
+    anima_rx_frame_queue_tb #(.DEPTH(2)) queue_depth_2 (.done(queue_cases_done[1]));
+    anima_rx_frame_queue_tb #(.DEPTH(4)) queue_depth_4 (.done(queue_cases_done[2]));
+    anima_rx_frame_queue_tb #(.DEPTH(8)) queue_depth_8 (.done(queue_cases_done[3]));
+    anima_rx_queue_chain_probe queue_chain (
+        .audio_clk(audio_clk), .reset_n(reset_n), .warm_reset_apply(warm_reset_apply),
+        .pair_complete(pair_complete), .out_ready(queue_can_accept),
+        .in_left(left_sample), .in_right(right_sample), .in_frame_id(frame_id));
+`endif
+
     // Admission witness only: this does not implement the actual RX FIFO.
     always @(posedge audio_clk or negedge reset_n) begin
         if (!reset_n) begin
@@ -253,6 +265,11 @@ module anima_i2s_receiver_tb;
               "directed capture/reset/admission coverage missing");
         $display("I2S_RX_PASS seed=%0d frames=%0d edges=%0d pairs=%0d rejected=%0d warm=%0d aborted=%0d wraps=%0d",
                  seed, frames, edges, published, drops, warm_resets, aborted_offers, wraps);
+`ifdef ANIMA_RX_QUEUE_TEST
+        check(&queue_cases_done, "queue unit cases have not finished");
+        queue_chain.report(seed);
+        $display("RX_QUEUE_PASS seed=%0d depths=1,2,4,8", seed);
+`endif
         $finish;
     end
 endmodule

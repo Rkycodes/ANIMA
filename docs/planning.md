@@ -1,6 +1,6 @@
 # ANIMA — Planning & Design
 
-Design baseline: October 22, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
+Design baseline: October 23, 2026. Owners: Robel Yaee and An Tiet. This is the single design/requirements document; [Implemented & Verified](implemented.md) records what actually exists. **Selected** means a design requirement, **proposed** needs agreement/evaluation, **open** needs an answer, and **deferred** is outside the current increment. None means hardware acceptance.
 
 ## Contents
 
@@ -138,7 +138,7 @@ Pre-edge visibility is part of this interface. At a rising processing edge whose
 | 1808 | Right LSB capture; next left selection is 240 processing cycles away |
 | 2047 → 0 | Phase wrap; next left boundary follows |
 
-The staged timing bench checks counting first, then registered clocks, then enables/metadata, then all together. This is component verification, not completed bypass acceptance or the five-minute audio regression. RX-to-queue ingress will be a nonbackpressurable complete-pair event (accept or whole-pair overflow rejection); the stored queue head uses the selected stable valid/ready interface.
+The staged timing bench checks counting first, then registered clocks, then enables/metadata, then all together. This is component verification, not completed bypass acceptance or the five-minute audio regression. RX-to-queue ingress is a nonbackpressurable complete-pair event (accept or whole-pair overflow rejection); the stored queue head uses the selected stable valid/ready interface.
 
 ## Stereo bypass contract
 
@@ -197,6 +197,26 @@ Derive dependent widths/counts; reject unsupported depths until contract/tests e
 Full RX [A, B] can dequeue A and enqueue complete C on the same edge → [B, C], no overflow. If no space remains after an **actual** same-edge dequeue, reject incoming whole pair and count overflow; never overwrite stalled head. Preserve order.
 
 TX can promote a waiting pair and accept eligible replacement on the same boundary without artificial backpressure. Empty waiting storage can accept expected data exactly on its deadline into current serialization without artificial silence. Never overwrite current output. For bypass, admit only data due for the next unfilled output slot to TX waiting; future pairs stay upstream, stale pairs transfer/discard, due data with reserved waiting slot is backpressured. Larger depths do not permit arbitrary future prefetch or change delay. Register/FSM organization remains code-local.
+
+### RX frame queue block contract
+
+The [RX frame queue](../rtl/audio/anima_rx_frame_queue.v) stores complete pairs before presenting them downstream; no empty-queue same-edge pass-through is selected. DEPTH is an integer build-time entry count, default 2, with only 1/2/4/8 supported. Storage entries are exactly 80 bits packed internally as frame_id[79:48], left[47:24], right[23:0]. Counter and pointer widths derive from DEPTH, including depth 1; unsupported depths cause an elaboration error.
+
+| Port | Direction / width / representation | Contract |
+| --- | --- | --- |
+| audio_clk / reset_n | Inputs, one bit each | Processing clock and active-low hard reset, with asynchronous assertion and externally synchronized release |
+| warm_reset_apply | Input, one bit | Shared synchronous flush, with priority over enqueue, dequeue and overflow |
+| pair_complete | Input, one bit | Nonbackpressurable receiver offer sampled on ingress edge Q = E+1 |
+| in_left / in_right | Inputs, signed 24 bits each | Complete offered stereo samples |
+| in_frame_id | Input, unsigned 32 bits | Offered pair identity; copied opaquely without renumbering or deadline decisions |
+| out_valid / out_ready | Output / input, one bit each | Stored head available / downstream acceptance on a processing rising edge |
+| out_left / out_right | Outputs, signed 24 bits each | Oldest stored pair; stable with out_valid while stalled |
+| out_frame_id | Output, unsigned 32 bits | Identity belonging to the presented samples |
+| overflow_event | Output, one bit, combinational | Visible before an edge rejecting an incoming pair: active and pair_complete and full and no actual same-edge dequeue |
+
+An offer accepted at Q first transfers downstream at Q+1 when ready; its head becomes visible after Q. With ready low, valid and all 80 bits remain stable until an actual transfer or reset flush. Full dequeue/enqueue retains occupancy and replaces the departing entry, including at depth 1. Full without a dequeue rejects only the incoming pair and emits overflow; it never overwrites the stalled head. Consecutive rejected offers generate an event on each rejecting edge. No queue input stalls or renumbers the receiver.
+
+Hard reset and warm flush empty the queue; no stale payload is visible or valid after either reset. Outputs are zero when invalid. Logical flush invalidates storage; it does not require clearing every memory bit. Both resets mask transfers and overflow while asserted. The separate diagnostic consumer will sample overflow_event on the rejection edge, increment its saturating counter and retain sticky fault evidence independently of audio flush. The queue does not implement that counter, LED, stall watchdog or an automatic overflow reset.
 
 ### Frame IDs, deadlines and late data
 
@@ -421,7 +441,7 @@ Working fill-in list: retain prior worksheet IDs; selected bypass answers live a
 | H-06, C-02 | Legal instantiated clock resources; PFD/VCO/phase/duty/jitter units/budgets, I/O delays/constraints, routed timing/measurement | Robel; shared review | Configuration only; other evidence open |
 | C-03, C-04, I-01 | Control/VGA clocks, coherent endpoints/owners, reset/publication/activation/telemetry boundaries | Shared | Common audio domain selected; others open |
 | C-05, C-06 | Physical startup/settling/guard, stopped-clock pad/reset implementation | Robel; shared review | Digital policy selected; physical evidence missing |
-| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | RX component evidence recorded; queue/scheduling/retained-age proof pending |
+| F-01–F-06 | Shared frame/queue/reset review, schedule/retained age and timing proof | Robel; An interface review | RX/queue component evidence recorded; scheduling/retained-age proof pending |
 | P-01 | An's explicit D-01/D-02 review/additional cases | An / Robel | |
 | P-02, N-01, N-03 | Snapshot validity, controller/FPGA validation, coefficient computation/reference, quantized stability/headroom | Shared; Robel numerics | Controlled-DSP slice |
 | P-03, P-05, P-06 | Activation readiness/boundary/delay, immutable cutoff, same-event C replacement vs B activation | Shared | Python call ordering is not hardware contract |

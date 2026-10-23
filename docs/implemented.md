@@ -1,6 +1,6 @@
 # ANIMA — Implemented & Verified
 
-Evidence baseline: October 22, 2026. Maintained by Robel Yaee and An Tiet. This document describes current repository behavior and actual checks. [Planning & Design](planning.md) owns requirements, future acceptance and open decisions. A passing model test is not audio or FPGA validation.
+Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This document describes current repository behavior and actual checks. [Planning & Design](planning.md) owns requirements, future acceptance and open decisions. A passing model test is not audio or FPGA validation.
 
 ## Contents
 
@@ -8,6 +8,7 @@ Evidence baseline: October 22, 2026. Maintained by Robel Yaee and An Tiet. This 
 - [Serial-timing component](#serial-timing-component)
 - [Warm-reset controller](#warm-reset-controller)
 - [I2S receiver](#i2s-receiver)
+- [RX frame queue](#rx-frame-queue)
 - [Python preset and frame model](#python-preset-and-frame-model)
 - [Reproduce current checks](#reproduce-current-checks)
 - [Checks actually performed](#checks-actually-performed)
@@ -26,8 +27,9 @@ Evidence baseline: October 22, 2026. Maintained by Robel Yaee and An Tiet. This 
 | Vivado investigation | Device/version/license query and in-memory Clocking Wizard probe | No synthesis, implementation, routed timing or audio executable |
 | Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
 | Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | No sample transport, bypass top, codec wrapper or XDC |
-| Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX reset application is tested below; queue/TX flush, button conditioning, diagnostics and clock supervision not integrated |
-| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | No real RX queue, scheduler, TX, cold supervisor or physical ADC validation |
+| Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX/queue reset application is tested below; TX flush, button conditioning, diagnostics and clock supervision not integrated |
+| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue integration is tested below; no scheduler, TX, cold supervisor or physical ADC validation |
+| RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Overflow event only; no fault counters/LED, watchdog, scheduler, TX or hardware timing evidence |
 | Firmware / host UART | Directory scaffold only | No firmware or serial utility |
 
 Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
@@ -60,7 +62,7 @@ Verilator is the default simulator. Current increments use Verilator only; Vivad
 
 Implemented October 22, 2026: [anima_warm_reset_controller.v](../rtl/audio/anima_warm_reset_controller.v) stores a qualified request until the next left boundary. Its pre-edge combinational application includes a fresh request on the boundary itself, coalesces further pending requests and clears pending on application. Hard reset clears pending and masks application asynchronously. The exact single-bit input/output contract is in [Planning & Design](planning.md#warm-reset-controller-interface).
 
-This component selects an edge; it does not reset the timing generator. The receiver component below now consumes warm-reset application and tests RX assembly/ID restart. Queues, scheduler and TX are not yet connected, so a complete system flush and stereo-output silence remain requirements rather than implemented system behavior. Button synchronization/debounce, watchdog request generation, diagnostics, cold qualification and stopped-clock supervision remain separate work.
+This component selects an edge; it does not reset the timing generator. The receiver component below now consumes warm-reset application and tests RX assembly/ID restart. The RX queue now also consumes that reset in the component integration test below. Scheduler and TX remain unimplemented, so complete system flush and stereo-output silence are not established. Button synchronization/debounce, watchdog request generation, diagnostics, cold qualification and stopped-clock supervision remain separate work.
 
 The independent [SystemVerilog bench](../sim/audio/anima_warm_reset_controller_tb.sv) instantiates the real timing block and assigns each request an absolute edge deadline based on elapsed edges. It checks the public interfaces without reading internal DUT state. A stand-in data register checks same-edge reset priority over ordinary work; it is not an audio source/sink or complete data-path model. Directed cases cover no-request operation, short off-boundary requests, repeated-request coalescing, requests on/just after/just before a boundary, pending plus a new boundary request, consecutive requested boundaries, hard reset while pending/application is visible and final drain. Seeded requests and hard resets add randomized timing coverage. The bench continuously checks that timing phase, serial pins and enables continue correctly across warm-reset application.
 
@@ -81,7 +83,7 @@ Implemented October 22, 2026: [anima_i2s_receiver.v](../rtl/audio/anima_i2s_rece
 
 RX hard reset asynchronously clears assembly, ID and completion state; after release, collection waits for a left boundary. Its reset can stay asserted while serial timing runs, leaving cold qualification to the future supervisor. The shared warm-reset controller clears RX state at its boundary and starts fresh frame-zero collection in that same interval. This is tested component integration, not completed cold startup or a bypass top.
 
-The [receiver bench](../sim/audio/anima_i2s_receiver_tb.sv) supplies ADC data after modeled falling serial edges, then independently scores expected source L/R values and IDs at E+1. It uses the real timing/reset components and an admission witness, not an implemented FIFO. Directed vectors include zero, signed extremes, LSB-sensitive and distinct-channel patterns; later pairs are seeded random values. Nonzero tail/padding, held RX reset while clocks run, mid-frame reset release, warm reset around channel/payload/handoff boundaries, pending-offer hard-reset cancellation and queue-rejected offers are checked. A continuous 258-frame segment exercises the low-byte ID carry. One explicit test-only hierarchical force/release seeds the next-ID register to 0xfffffffe for bounded full-width rollover coverage; subsequent public pair IDs/data are independently scored. This is not a run of 2^32 frames and adds no production seed port or parameter.
+The [receiver bench](../sim/audio/anima_i2s_receiver_tb.sv) supplies ADC data after modeled falling serial edges, then independently scores expected source L/R values and IDs at E+1. Its default mode uses the real timing/reset components and an admission witness; the optional queue suite below additionally connects the implemented FIFO. Directed vectors include zero, signed extremes, LSB-sensitive and distinct-channel patterns; later pairs are seeded random values. Nonzero tail/padding, held RX reset while clocks run, mid-frame reset release, warm reset around channel/payload/handoff boundaries, pending-offer hard-reset cancellation and queue-rejected offers are checked. A continuous 258-frame segment exercises the low-byte ID carry. One explicit test-only hierarchical force/release seeds the next-ID register to 0xfffffffe for bounded full-width rollover coverage; subsequent public pair IDs/data are independently scored. This is not a run of 2^32 frames and adds no production seed port or parameter.
 
 ```sh
 python scripts/run_i2s_receiver.py --lint
@@ -90,7 +92,26 @@ python scripts/run_i2s_receiver.py --seed 2026
 
 The [Verilator-only runner](../scripts/run_i2s_receiver.py) defaults to 32 randomized frame units after directed cases, requires a unique I2S_RX_PASS marker and keeps logs under ignored build/i2s_receiver/verilator/simulate-seed-<seed>.log. **Actual results:** Verilog-2001 lint passed; all three seeds passed with these processing-edge / published-pair / admission-rejection / warm-reset counts: seed 1, 706631 / 324 / 8 / 27; seed 42, 706638 / 326 / 10 / 33; seed 2026, 706617 / 327 / 10 / 33. Each run covered one cancelled offer and one seeded 32-bit rollover. Rejections count witness decisions, not implemented hardware overflow counters. Clock/reset and existing model sources were preserved. No full repository/model rerun was performed in this component increment; the existing Python model error remains recorded below.
 
-No real RX queue, queue-overflow diagnostics, scheduler, transmitter, five-minute simulated audio, synthesized implementation or hardware audio result exists yet.
+The RX queue is now implemented and tested below. Queue-overflow counters/LED, scheduler, transmitter, five-minute simulated audio, synthesized implementation and hardware audio results remain pending.
+
+## RX frame queue
+
+Implemented October 23, 2026: [anima_rx_frame_queue.v](../rtl/audio/anima_rx_frame_queue.v) stores complete 80-bit L/R/ID entries in a synchronous FIFO. DEPTH defaults to 2; only 1/2/4/8 are legal. Pointer/count widths derive from DEPTH with depth-1-safe wrapping. Head data and valid depend on stored state, not incoming data or ready. Enqueue on Q first permits downstream acceptance on Q+1; for the receiver this is E+2 after final right-bit capture, leaving 238 processing cycles to the next left boundary before remaining scheduling work. The exact interface is in the [queue contract](planning.md#rx-frame-queue-block-contract).
+
+A full FIFO can dequeue and enqueue on the same edge without overflow, including depth 1. Otherwise it preserves the stalled head and rejects the new whole pair. Its combinational overflow_event is available before the rejecting edge; repeated rejected offers count as separate edge-qualified events. The queue has no overflow counter, LED or watchdog. Hard reset and shared warm flush clear occupancy/pointers and mask valid, data and overflow. Payload storage need not be erased because invalid entries cannot be exposed or replayed.
+
+The independent [queue cases](../sim/audio/anima_rx_frame_queue_tb.sv) compare the public interface against a SystemVerilog dynamic-list model at each edge, without inspecting RTL storage/pointers. Each depth has directed empty-ready arrival, stall, overflow, full replacement, sustained transfer, pointer wrap, hard-reset and warm-reset collision checks plus seeded random offers/ready/flushes and hard resets. Inputs continue changing while the output head stalls. A positive seed plus depth initializes a nonzero xorshift state.
+
+With ANIMA_RX_QUEUE_TEST defined, the existing [receiver bench](../sim/audio/anima_i2s_receiver_tb.sv) also instantiates all four queue cases and a [real receiver-to-queue monitor](../sim/audio/anima_rx_queue_chain_probe.sv). The original independent ADC source/sample/ID scoreboard remains active. The chain monitor separately scores accepted/rejected queue offers, stored output order and flushes at default depth 2. Together they check final-bit capture on E, queue ingress on E+1, stored-head downstream transfer from E+2, random stalls, complete-pair rejection and aligned reset/ID restart. The receiver's original standalone mode remains available without this define.
+
+```sh
+python scripts/run_rx_frame_queue.py --lint
+python scripts/run_rx_frame_queue.py --seed 2026
+```
+
+The [Verilator-only runner](../scripts/run_rx_frame_queue.py) defaults to 10000 randomized cycles per queue depth, in addition to directed cases and the existing 32-frame-unit receiver stimulus. --cycles accepts 1–100000 and does not represent simulated audio duration. Lint covers all four supported depths and checks that depth 3 fails elaboration. Generated logs remain under ignored build/rx_frame_queue/. Success requires unique pass markers for all four depth cases and the complete suite; the chain itself checks a final empty queue before reporting success.
+
+**Validation status:** strict Verilog-2001 lint passed at depths 1/2/4/8; unsupported depth 3 was rejected with the intended configuration diagnostic. The receiver bench also passed timing-aware lint in its standalone mode. With the corrected nonzero random generator, seeds 1/42/2026 each passed all four depths (12 cases), each using 10000 random cycles plus directed checks. The real receiver-to-default-depth queue chains accepted 322/324/325 pairs respectively, each reporting two deliberate overflow events, and all drained cleanly. The original independent receiver checks also passed in those runs. The initial test-only zero-state seed issue was corrected; queue RTL did not change. Per-seed logs are build/rx_frame_queue/verilator/simulate-seed-<seed>.log. Touched-file UTF-8/LF/whitespace, Python parsing, Markdown structure and 100 local links passed. At the October 23 commit boundary, the repository checker and queue lint/seeded regressions passed again. The Python model regression reported 19 passing tests and the previously recorded end_frame signature error; model/test sources remain unchanged. No scheduler, TX, diagnostic counter/LED, five-minute audio acceptance, synthesis or hardware result is established.
 
 ## Python preset and frame model
 
@@ -146,6 +167,7 @@ The workflow [.github/workflows/ci.yml](../.github/workflows/ci.yml) currently r
 | Serial timing, October 22 | Verilog-2001 lint and case all, seeds 1/42/2026, passed in both Vivado Simulator and WSL Verilator; timing component only |
 | Warm reset, October 22 | Verilator Verilog-2001 lint and seeds 1/42/2026 passed; real timing plus stand-in consumer, not complete audio integration |
 | I2S receiver, October 22 | Verilator lint and seeds 1/42/2026 passed; E+1 pair/data/ID scoreboard, real timing/reset, admission witness and explicit bounded rollover seed |
+| RX frame queue, October 23 | Verilog-2001 lint depths 1/2/4/8 passed, depth 3 rejected; seeds 1/42/2026 passed all four depths and real receiver-to-queue integration. Original receiver standalone mode passed timing-aware lint |
 | Mermaid rendering | Mermaid/mmdc unavailable; manually reviewed syntax and retained editable sources. No rendered-Mermaid verification claimed |
 
 Consolidation checks passed on October 15: repository formatting/local-file/heading links and diagram integrity; a valid checker fixture plus nine deliberate failure cases (broken heading/file/path, invalid UTF-8/LF, SVG, Mermaid header, metadata and missing required document); exact preservation of all 15 source-register rows. The Mermaid header check is not rendering. No five-minute audio simulation, synthesis, timing closure, board programming, analog capture or acoustic latency result exists.
@@ -191,10 +213,10 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [planning.md](planning.md) / this document | Design requirements versus current evidence |
 | [diagrams/](diagrams) | Five editable Mermaid sources and timing SVG |
 | [config/project.json](../config/project.json) | Planning metadata; draft baud is not a frozen protocol |
-| [rtl/](../rtl) | Serial timing, warm-reset controller and I2S receiver; remaining audio subsystems scaffold |
+| [rtl/](../rtl) | Serial timing, warm-reset controller, I2S receiver and RX frame queue; remaining audio subsystems scaffold |
 | [model/](../model) | Reserved audio reference/bit-exact models |
 | [sim/fpga_control_logic/](../sim/fpga_control_logic) | Current Python model/tests |
-| [sim/audio/](../sim/audio) | Timing, warm-reset and ADC-source/receiver component benches |
+| [sim/audio/](../sim/audio) | Timing/reset/receiver benches, queue depth cases and receiver-to-queue monitor |
 | [firmware/esp32/](../firmware/esp32) | Reserved firmware area |
 | [tools/serial_host/](../tools/serial_host) | Reserved PC UART diagnostics |
 | [hardware/](../hardware) | Reserved assets; live inventory is in Planning & Design |
@@ -202,6 +224,7 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [scripts/run_serial_timing.py](../scripts/run_serial_timing.py) | Focused timing lint/simulation runner; Verilator default |
 | [scripts/run_warm_reset.py](../scripts/run_warm_reset.py) | Focused Verilator-only warm-reset lint/simulation runner |
 | [scripts/run_i2s_receiver.py](../scripts/run_i2s_receiver.py) | Focused Verilator-only receiver lint/simulation runner |
+| [scripts/run_rx_frame_queue.py](../scripts/run_rx_frame_queue.py) | Verilator-only queue depths and real receiver integration runner |
 | [scripts/vivado/](../scripts/vivado) | Reserved build tooling |
 | [results/](../results) | Reserved measured/release evidence; no audio measurements |
 | [.github/](../.github) | CI and operational issue/PR templates, retained separately |

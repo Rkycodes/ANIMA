@@ -4,7 +4,7 @@
 
 A planned Basys 3 / Pmod I2S2 stereo audio processor with ESP32 wireless controls. Nominal 48 kHz, signed 24-bit samples, two 32-bit I2S slots. Wi-Fi carries controls only.
 
-**Current status:** Python preset/frame behavioral model, repository checks and [serial-timing](docs/implemented.md#serial-timing-component), [warm-reset controller](docs/implemented.md#warm-reset-controller) and [I2S receiver](docs/implemented.md#i2s-receiver) RTL components with passing simulation checks. No complete audio path, firmware, synthesis target, routed timing or hardware audio validation. First audio milestone: stereo bypass without DSP. Basys 3 D.1 is on hand; the intended Pmod has not yet been purchased.
+**Current status:** Python preset/frame behavioral model, repository checks and [serial-timing](docs/implemented.md#serial-timing-component), [warm-reset controller](docs/implemented.md#warm-reset-controller), [I2S receiver](docs/implemented.md#i2s-receiver) and [RX frame queue](docs/implemented.md#rx-frame-queue) RTL components with passing simulation checks. No complete audio path, firmware, synthesis target, routed timing or hardware audio validation. First audio milestone: stereo bypass without DSP. Basys 3 D.1 is on hand; the intended Pmod has not yet been purchased.
 
 ## Read the project
 
