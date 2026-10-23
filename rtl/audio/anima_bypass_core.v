@@ -11,6 +11,9 @@ module anima_bypass_core #(
     input wire data_reset_n,
     input wire reset_request,
     input wire adc_sdata,
+    input wire diagnostic_reset_n,
+    input wire diagnostic_clear,
+    input wire recovered_clock_loss_event,
     output wire mclk,
     output wire sclk,
     output wire lrck,
@@ -24,7 +27,13 @@ module anima_bypass_core #(
     output wire ambiguous_id_event,
     output wire frame_select_ce,
     output wire frame_real,
-    output wire [31:0] frame_id
+    output wire [31:0] frame_id,
+    output wire [31:0] underflow_count,
+    output wire [31:0] overflow_count,
+    output wire [31:0] late_discard_count,
+    output wire [31:0] stall_timeout_count,
+    output wire [31:0] recovered_clock_loss_count,
+    output wire fault_sticky
 );
     wire data_active_n = reset_n && data_reset_n;
     wire [10:0] unused_phase_cycle;
@@ -85,6 +94,16 @@ module anima_bypass_core #(
         .rx_progress(rx_progress), .tx_nonempty(waiting_nonempty),
         .tx_progress(waiting_progress), .recovery_request(recovery_request),
         .stall_timeout_event(stall_timeout_event));
+    // Do not substitute data_active_n or reset_n for diagnostic_reset_n:
+    // fault evidence must survive normal/recoverable audio reset.
+    anima_audio_diagnostics diagnostics (.audio_clk(audio_clk),
+        .diagnostic_reset_n(diagnostic_reset_n), .diagnostic_clear(diagnostic_clear),
+        .underflow_event(underflow_event), .overflow_event(overflow_event),
+        .late_discard_event(late_discard_event), .stall_timeout_event(stall_timeout_event),
+        .recovered_clock_loss_event(recovered_clock_loss_event),
+        .underflow_count(underflow_count), .overflow_count(overflow_count),
+        .late_discard_count(late_discard_count), .stall_timeout_count(stall_timeout_count),
+        .recovered_clock_loss_count(recovered_clock_loss_count), .fault_sticky(fault_sticky));
 endmodule
 
 `default_nettype wire

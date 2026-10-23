@@ -9,7 +9,7 @@ from run_serial_timing import ROOT, run, verilator_environment
 
 RTL_NAMES = ("anima_serial_timing.v", "anima_warm_reset_controller.v", "anima_i2s_receiver.v",
              "anima_rx_frame_queue.v", "anima_frame_scheduler.v", "anima_i2s_transmitter.v",
-             "anima_audio_watchdogs.v", "anima_bypass_core.v")
+             "anima_audio_watchdogs.v", "anima_audio_diagnostics.v", "anima_bypass_core.v")
 BENCH_NAMES = ("anima_bypass_core_tb.sv", "anima_audio_watchdogs_tb.sv", "anima_bypass_recovery_tb.sv")
 
 

@@ -240,7 +240,7 @@ First left boundary after hard reset starts capture interval zero and selects in
 
 Between boundaries, admit the expected ID when no pair is reserved; duplicates of a reserved ID remain backpressured. At a boundary, promote a reservation before deciding whether an incoming pair reserves the next slot. Compare incoming ID against that next unfilled admission ID: due can enter if space exists, late transfers/discards, future and exactly half-range stay upstream. Thus promotion can accept next-ID replacement, while an empty boundary accepts its due pair directly. A missed slot still advances the schedule; a pair arriving one clock later is discarded. No payload is replayed to catch up. Ambiguous input raises the violation signal; its presence must fail the integrating simulation assertion. Neither stale discard nor a future/ambiguous offer suppresses underflow for an unfilled deadline.
 
-Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction. The serializer and watchdogs are integrated in the core described below; retained-age proof and diagnostic counters remain pending.
+Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction. The serializer and watchdogs are integrated in the core described below; retained-age proof remains pending; diagnostic storage is now connected as described below.
 
 ### I2S transmitter block contract
 
@@ -292,7 +292,7 @@ The [bypass core](../rtl/audio/anima_bypass_core.v) connects serial timing, rese
 
 | Core ports | Representation and meaning |
 | --- | --- |
-| audio_clk / reset_n | Processing clock and global active-low hard reset, asynchronous assertion and externally synchronized release; global reset resets serial timing too |
+| audio_clk / reset_n | Processing clock and global audio active-low hard reset, asynchronous assertion and externally synchronized release; resets serial timing/data, not diagnostic storage |
 | data_reset_n | Separate one-bit active-low data qualification reset, externally synchronized release; ANDed with reset_n for data blocks, reset controller and watchdogs. Hold low during future cold qualification while reset_n allows serial clocks to run |
 | reset_request | Qualified one-bit audio-domain request; raw button conditioning and stopped-clock supervision remain upstream |
 | adc_sdata / dac_sdata | One-bit serial input / registered serial output |
@@ -302,12 +302,14 @@ The [bypass core](../rtl/audio/anima_bypass_core.v) connects serial timing, rese
 | stall_timeout_event | One-bit registered event, high for one processing cycle after a threshold edge; simultaneous RX/TX expiry emits one event |
 | ambiguous_id_event | One-bit stream violation indication for integration assertions; not an additional error counter |
 | frame_select_ce / frame_real / frame_id | One-bit selection transaction / real-sample flag and unsigned 32-bit selected identity; meaningful at the selection edge, not a frozen telemetry packet map |
+| diagnostic_reset_n / diagnostic_clear / recovered_clock_loss_event | Independent initialization reset / qualified clear / supervisor event, all one bit; detailed lifetime below |
+| underflow_count / overflow_count / late_discard_count / stall_timeout_count / recovered_clock_loss_count / fault_sticky | Five unsigned 32-bit counts and one-bit sticky fault level; unaffected by core audio reset paths |
 
 Each watchdog uses an unsigned 11-bit count and the fixed first-build threshold of 2048 processing edges. Count an edge only when that queue was nonempty before the edge and made no actual dequeue/promotion. The first such edge counts one; expiry is on the 2048th. Empty or actual progress clears that queue's timer; progress on the threshold edge wins. RX progress includes stale acceptance/discard. TX progress means promotion of a stored pair, not enqueue, current serialization or direct empty-slot selection. Hard reset or shared warm application clears both monitors with priority; startup/data reset leaves their queues empty or held reset.
 
 A threshold edge registers recovery_request and stall_timeout_event. The registered request is high until warm application; no second stall event occurs during that pending incident, even if the other queue later expires. The reset controller observes the request beginning on the following processing edge and applies the shared flush at the first subsequent left boundary. If expiry itself occurs on a left-boundary edge, recovery occurs at the next left boundary, not retroactively on the expiry edge. This registered staging avoids a combinational loop through reset-masked valid/ready. Clocks keep running, reset flushes all audio ownership and numbering, and fresh frame zero is eligible for the following output slot. Diagnostic consumers sample the registered stall event on its high cycle; their counters/LED must retain evidence independently of audio reset.
 
-Watchdog timeout is tied to the selected fixed 2048-cycle timing frame, not a runtime setting. Changing timing ratios requires coordinated review of timing, watchdog threshold/widths, budgets and tests. Board clock generation/qualification, stopped-clock detection, diagnostics storage/button conditioning and electrical constraints are outside this core increment.
+Watchdog timeout is tied to the selected fixed 2048-cycle timing frame, not a runtime setting. Changing timing ratios requires coordinated review of timing, watchdog threshold/widths, budgets and tests. Board clock generation/qualification, stopped-clock detection, button conditioning and electrical constraints remain outside this core. Diagnostic storage is connected in the increment described below.
 
 ## Reset and recovery
 
@@ -360,6 +362,25 @@ Selected October 15: five unsigned **32-bit saturating** counters, maximum 42949
 | recovered_clock_loss | Detected loss episode completes qualified recovery |
 
 Any fault sets LED0; clock-loss detection latches evidence while reference is available for presentation after recovery. Preserve counts/LED across warm reset/recoverable loss; initialize zero at power-up/reconfiguration. Down-button diagnostic clear clears all five/LED without changing audio/IDs/clocks/queues. New event on clear wins: its counter one, LED on, others zero. Multiple classes per edge allowed; sum is not unique lost frames. Intentional startup/reset silence is not underflow. Diagnostics never block audio. Later UART/browser equivalents must retain semantics; wire map open.
+
+### Diagnostic storage block contract
+
+The [audio diagnostics](../rtl/audio/anima_audio_diagnostics.v) implement the selected five counters and sticky fault level. They consume events in audio_clk and have no audio-control outputs, ready/valid handshake or backpressure. Their storage reset is independent of audio timing/data resets.
+
+| Ports | Representation and meaning |
+| --- | --- |
+| audio_clk | Processing clock; counter/event sampling occurs on its rising edge |
+| diagnostic_reset_n | One-bit active-low initialization/reconfiguration reset with asynchronous assertion and externally synchronized release. Do not derive it from ordinary audio reset, data qualification reset or recoverable clock-lock loss |
+| diagnostic_clear | Qualified one-bit audio-domain clear action, normally one clock; future board button/UART sources require their own conditioning/arbitration |
+| underflow_event / overflow_event / late_discard_event | One bit each; existing pre-edge events, one increment per asserted sampling edge |
+| stall_timeout_event | One-bit registered watchdog event; counted on its high cycle, including when warm application happens on that same edge |
+| recovered_clock_loss_event | One-bit qualified audio-domain event after one detected loss episode completes recovery; upstream reference-side evidence latch, coherent crossing and exactly-once delivery remain unimplemented |
+| underflow_count / overflow_count / late_discard_count / stall_timeout_count / recovered_clock_loss_count | Five independent unsigned 32-bit outputs, zero at initialization and saturating at 0xffffffff |
+| fault_sticky | One-bit registered fault evidence for eventual LED0; any of the five event classes sets it, retained until explicit clear or initialization |
+
+Initialization wins over clear/events. Otherwise a clear begins a new diagnostic interval: counters for new events on that edge become 1, others become 0, and fault_sticky becomes the OR of those events. Without clear, each asserted class increments its own counter unless already saturated; no event leaves that counter unchanged and the sticky level remains set. Consecutive high event cycles represent consecutive occurrences. Multiple classes can increment together; counts are not a unique lost-frame total. Fixed 32-bit widths are selected; no runtime width/format is introduced.
+
+The bypass core exposes these diagnostic ports and instantiates the storage separately from its audio resets. Downstream readers must later acquire a coherent status snapshot; these live outputs are not a selected UART/browser wire map. No recovered-clock event is fabricated by data reset, and the current module is not a clock-loss detector or recovery supervisor. Physical LED/pad wiring and button debounce/synchronization remain board integration work.
 
 ### Browser, VGA and telemetry
 

@@ -17,11 +17,14 @@ module anima_bypass_core_tb;
     wire dac_sdata;
     anima_i2s_transmitter dut (.*);
 
-    logic adc_sdata=0;
+    logic adc_sdata=0, core_diag_clear=0;
     wire [15:0] core_data, core_mclk, core_sclk, core_lrck;
     wire [15:0] core_warm, core_pending, core_overflow, core_underflow, core_late;
     wire [15:0] core_stall, core_ambiguous, core_select, core_real;
     wire [31:0] core_id [0:15];
+    wire [31:0] core_underflow_count [0:15], core_overflow_count [0:15];
+    wire [31:0] core_late_count [0:15], core_stall_count [0:15], core_clock_count [0:15];
+    wire [15:0] core_fault;
     genvar r, t;
     generate for (r=0;r<4;r=r+1) begin : rx_configs
         for (t=0;t<4;t=t+1) begin : tx_configs
@@ -29,13 +32,17 @@ module anima_bypass_core_tb;
             anima_bypass_core #(.RX_DEPTH(1<<r), .TX_WAIT_DEPTH(1<<t)) core (
                 .audio_clk(audio_clk), .reset_n(reset_n), .data_reset_n(reset_n),
                 .reset_request(reset_request), .adc_sdata(adc_sdata),
+                .diagnostic_reset_n(reset_n), .diagnostic_clear(core_diag_clear), .recovered_clock_loss_event(1'b0),
                 .mclk(core_mclk[INDEX]), .sclk(core_sclk[INDEX]), .lrck(core_lrck[INDEX]),
                 .dac_sdata(core_data[INDEX]), .warm_reset_apply(core_warm[INDEX]),
                 .reset_pending(core_pending[INDEX]), .overflow_event(core_overflow[INDEX]),
                 .underflow_event(core_underflow[INDEX]), .late_discard_event(core_late[INDEX]),
                 .stall_timeout_event(core_stall[INDEX]), .ambiguous_id_event(core_ambiguous[INDEX]),
                 .frame_select_ce(core_select[INDEX]), .frame_real(core_real[INDEX]),
-                .frame_id(core_id[INDEX]));
+                .frame_id(core_id[INDEX]), .underflow_count(core_underflow_count[INDEX]),
+                .overflow_count(core_overflow_count[INDEX]), .late_discard_count(core_late_count[INDEX]),
+                .stall_timeout_count(core_stall_count[INDEX]), .recovered_clock_loss_count(core_clock_count[INDEX]),
+                .fault_sticky(core_fault[INDEX]));
         end
     end endgenerate
     wire chain_select_ce=core_select[0], chain_real=core_real[0], chain_sdata=core_data[0];
@@ -81,7 +88,7 @@ module anima_bypass_core_tb;
         slot_index=(phase%1024)/32;
         warm=boundary && (pending || reset_request);
         random_word(); select_left=24'(rng);
-        random_word(); select_right=24'(rng);
+        random_word(); select_right=24'(rng); core_diag_clear=(rng[7:0]==0);
         // Selection bus changes every clock, including during right playback;
         // only the pair presented at the left boundary belongs to this slot.
         select_ce=boundary;
@@ -146,6 +153,9 @@ module anima_bypass_core_tb;
             end
         end
         for (int config_index=0;config_index<16;config_index++) begin
+            check({core_underflow_count[config_index],core_overflow_count[config_index],
+                   core_late_count[config_index],core_stall_count[config_index],core_clock_count[config_index],
+                   core_fault[config_index]}===161'd0,"normal depth-matrix diagnostics remain zero");
             check(core_data[config_index]===expected_chain_bit,"depth-matrix DAC bit");
             check({core_mclk[config_index],core_sclk[config_index],core_lrck[config_index]}==={mclk,sclk,lrck},"depth-matrix clocks");
             check(core_warm[config_index]===warm_reset_apply && core_pending[config_index]===pending,"depth-matrix reset");

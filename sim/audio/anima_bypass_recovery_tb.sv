@@ -4,6 +4,10 @@ module anima_bypass_recovery_tb(output bit done=0);
     logic audio_clk=0, reset_n=0, data_reset_n=0, reset_request=0, adc_sdata=0;
     wire mclk, sclk, lrck, dac_sdata, warm_reset_apply, reset_pending;
     wire overflow_event, underflow_event, late_discard_event, stall_timeout_event, ambiguous_id_event;
+    logic diagnostic_reset_n=0, diagnostic_clear=0, recovered_clock_loss_event=0;
+    wire [31:0] underflow_count, overflow_count, late_discard_count, stall_timeout_count;
+    wire [31:0] recovered_clock_loss_count;
+    wire fault_sticky;
     wire frame_select_ce, frame_real;
     wire [31:0] frame_id;
     anima_bypass_core dut (.*);
@@ -44,9 +48,12 @@ module anima_bypass_recovery_tb(output bit done=0);
         audio_clk=0; #1; phase=(phase+1)%2048; ticks++;
     endtask
     initial begin
-        #1; reset_n=1;
+        #1; reset_n=1; diagnostic_reset_n=1;
         repeat(2171) tick(); // clocks run while all data blocks remain reset
         data_reset_n=1;
+        // Synthetic qualified supervisor event; the actual detector/CDC is
+        // outside this core. Keep its evidence through all following resets.
+        recovered_clock_loss_event=1; tick(); recovered_clock_loss_event=0;
         while(phase!=0) tick(); tick(); // aligned first capture interval
         // Block scheduler before its first reservation: RX alone must time out.
         force dut.scheduler.started=1'b0;
@@ -68,6 +75,21 @@ module anima_bypass_recovery_tb(output bit done=0);
         assert(!dac_sdata && !frame_real && !stall_timeout_event)
             else $fatal(1,"BYPASS_FAIL async data-only reset");
         repeat(32) tick();
+        assert(stall_timeout_count==2 && recovered_clock_loss_count==1 && fault_sticky &&
+               underflow_count==0 && overflow_count==0 && late_discard_count==0)
+            else $fatal(1,"BYPASS_FAIL counters preserve two incidents across warm/data resets");
+        checking_restart=0; reset_n=0; #1; phase=0;
+        assert(stall_timeout_count==2 && recovered_clock_loss_count==1 && fault_sticky)
+            else $fatal(1,"BYPASS_FAIL global audio reset must preserve diagnostic evidence");
+        reset_n=1; repeat(32) tick();
+        diagnostic_clear=1; recovered_clock_loss_event=1; tick();
+        assert(stall_timeout_count==0 && recovered_clock_loss_count==1 && fault_sticky)
+            else $fatal(1,"BYPASS_FAIL clear/new-event priority in core");
+        diagnostic_clear=0; recovered_clock_loss_event=0; tick();
+        diagnostic_clear=1; tick(); diagnostic_clear=0;
+        assert(!fault_sticky && {underflow_count,overflow_count,late_discard_count,
+               stall_timeout_count,recovered_clock_loss_count}==160'd0)
+            else $fatal(1,"BYPASS_FAIL explicit diagnostic clear");
         $display("BYPASS_RECOVERY_PASS ticks=%0d incidents=%0d applications=%0d restarts=%0d overflows=%0d",ticks,incidents,applications,checked_restarts,overflows);
         done=1;
     end
