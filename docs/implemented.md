@@ -10,6 +10,7 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 - [I2S receiver](#i2s-receiver)
 - [RX frame queue](#rx-frame-queue)
 - [Frame scheduler](#frame-scheduler)
+- [I2S transmitter](#i2s-transmitter)
 - [Python preset and frame model](#python-preset-and-frame-model)
 - [Reproduce current checks](#reproduce-current-checks)
 - [Checks actually performed](#checks-actually-performed)
@@ -29,9 +30,10 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 | Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
 | Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | No sample transport, bypass top, codec wrapper or XDC |
 | Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX/queue reset application is tested below; TX flush, button conditioning, diagnostics and clock supervision not integrated |
-| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue integration is tested below; no integrated scheduler/TX path, cold supervisor or physical ADC validation |
+| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue and short DAC-side component-chain checks below; no cold supervisor or physical ADC validation |
 | RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Overflow event only; no fault counters/LED, watchdog, TX or hardware timing evidence |
-| Frame scheduler RTL | Expected-ID selection and owned next-due waiting register | Component validation recorded below; no TX serializer, watchdog or full bypass integration |
+| Frame scheduler RTL | Expected-ID selection and owned next-due waiting register | Component validation and short TX chain below; no watchdog, cold supervisor or accepted bypass build |
+| I2S transmitter RTL | Captures scheduler-selected L/R and serializes 24-bit I2S with zero padding | Component/chain simulation described below; no board build or hardware acceptance |
 | Firmware / host UART | Directory scaffold only | No firmware or serial utility |
 
 Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
@@ -129,6 +131,21 @@ python scripts/run_frame_scheduler.py --seed 2026
 ```
 
 The [runner](../scripts/run_frame_scheduler.py) uses Verilator only and saves build/logs under ignored build/frame_scheduler/. **Actual results:** strict Verilog-2001 lint passed at depths 1/2/4/8 and unsupported depth 3 failed elaboration as intended. Final bench seeds 1/42/2026 each passed all four configurations: 12 cases, each with 120000 randomized edges plus directed checks and final drain, totaling 147461 processing edges per case. Each seed also rejected the deliberately ambiguous half-range stream through the integrating assertion. No lint warnings were waived. Touched-file UTF-8/no-BOM, LF/whitespace, Python parsing and 107 local-file/heading links passed. At the authorized scheduler commit boundary, the repository checker and all scheduler lint/seeded checks passed again. The Python model suite, run from the repository root, reported 19 passing tests and the unchanged known end_frame signature error; no model sources were changed. This is component scheduling verification, not receiver-to-TX integration, 300 seconds of simulated audio, synthesis, routed timing or hardware audio validation. No watchdog, diagnostic counters, serializer or cold-start supervisor is implemented here.
+
+## I2S transmitter
+
+Implemented October 23: [anima_i2s_transmitter.v](../rtl/audio/anima_i2s_transmitter.v) captures the scheduler-selected signed 24-bit L/R pair together, then drives one registered serial bit on each authorized SCLK falling edge. Slots 1–24 emit bits 23–0; slot 0 and slots 25–31 emit zero. Inputs may change while current serialization continues; no ready/valid handshake or future-pair storage exists in this block. Shared warm reset clears the current pair/data at a left boundary without resetting serial timing. [Port contract](planning.md#i2s-transmitter-block-contract).
+
+The [testbench](../sim/audio/anima_i2s_transmitter_tb.sv) checks a directly driven transmitter while changing its selection bus every processing clock. An independent elapsed-edge oracle checks every output-bit launch, rising-edge capture, intervening hold cycle, channel position and serial clock waveform. It also connects the real timing, warm-reset controller, ADC receiver, RX queue, scheduler and a second TX. A behavioral ADC supplies signed extrema, zero, alternating bits and asymmetric frame/channel patterns, with arbitrary tail/padding bits. A DAC-side decoder reconstructs actual output-pin samples and compares whole pairs against source-derived next-slot expectations, including schedule IDs. It does not feed TX output back into the expected source.
+
+Directed tests cover asynchronous hard reset during right payload and padding, off-boundary/coalesced reset requests, same-boundary application and intentional startup/reset zeros. Randomized requests run for 96 frame units, followed by completion of the current interval and two complete frames. Every pair in those checked slots is decoded, including intentional silence. Acquisition continues during the final two checked output frames, so a newly captured pair can remain buffered when simulation ends; this does not establish final drain for full bypass acceptance. This is a short behavioral component-chain regression, not a 300-second acceptance run or a board-ready top-level design. Five-minute regression, watchdogs/counters, cold qualification, physical clock supervision, I/O constraints and board integration remain outstanding.
+
+```sh
+python scripts/run_i2s_transmitter.py --lint
+python scripts/run_i2s_transmitter.py --seed 2026
+```
+
+The [runner](../scripts/run_i2s_transmitter.py) uses Verilator only, requires a unique pass marker and stores logs/builds under ignored build/i2s_transmitter/. **Actual results:** Verilog-2001 lint passed without waivers. Seeds 1/42/2026 each passed 212296 processing edges, reconstructing 103 stereo pairs from each transmitter (standalone and connected chain), with three asynchronous hard resets per run. Warm-reset applications were 27/22/19 respectively. The initial run reached the end with bit/pair checks passing but failed an overly high normal-frame coverage threshold; the test-only threshold was corrected because intentional warm-reset slots are excluded from that normal-frame count. All three results above use the corrected bench; serializer RTL was unchanged. The six touched files passed UTF-8/no-BOM, LF/whitespace and Python parsing checks; 114 local-file/heading links passed. At the authorized TX commit boundary, repository checks, TX lint and all three seeded TX/component-chain regressions passed again. The unchanged Python model suite reported 19 passing tests and the previously recorded end_frame signature error; no model files were changed. No synthesis, routed timing, programmed FPGA or hardware audio result is claimed.
 
 ## Python preset and frame model
 
@@ -230,10 +247,10 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [planning.md](planning.md) / this document | Design requirements versus current evidence |
 | [diagrams/](diagrams) | Five editable Mermaid sources and timing SVG |
 | [config/project.json](../config/project.json) | Planning metadata; draft baud is not a frozen protocol |
-| [rtl/](../rtl) | Serial timing, warm-reset controller, I2S receiver and RX frame queue; remaining audio subsystems scaffold |
+| [rtl/](../rtl) | Serial timing, warm-reset controller, I2S receiver, RX frame queue, frame scheduler and I2S transmitter; board integration and DSP remain pending |
 | [model/](../model) | Reserved audio reference/bit-exact models |
 | [sim/fpga_control_logic/](../sim/fpga_control_logic) | Current Python model/tests |
-| [sim/audio/](../sim/audio) | Timing/reset/receiver benches, queue depth cases and receiver-to-queue monitor |
+| [sim/audio/](../sim/audio) | Timing/reset/receiver benches, queue depth cases, scheduler cases and standalone/connected TX checks |
 | [firmware/esp32/](../firmware/esp32) | Reserved firmware area |
 | [tools/serial_host/](../tools/serial_host) | Reserved PC UART diagnostics |
 | [hardware/](../hardware) | Reserved assets; live inventory is in Planning & Design |
@@ -242,6 +259,8 @@ Keep main usable, use focused PRs and report actual validation. Obtain Robel's a
 | [scripts/run_warm_reset.py](../scripts/run_warm_reset.py) | Focused Verilator-only warm-reset lint/simulation runner |
 | [scripts/run_i2s_receiver.py](../scripts/run_i2s_receiver.py) | Focused Verilator-only receiver lint/simulation runner |
 | [scripts/run_rx_frame_queue.py](../scripts/run_rx_frame_queue.py) | Verilator-only queue depths and real receiver integration runner |
+| [scripts/run_frame_scheduler.py](../scripts/run_frame_scheduler.py) | Verilator-only scheduler depth/seed/invalid-ID runner |
+| [scripts/run_i2s_transmitter.py](../scripts/run_i2s_transmitter.py) | Verilator-only TX and short audio-component-chain runner |
 | [scripts/vivado/](../scripts/vivado) | Reserved build tooling |
 | [results/](../results) | Reserved measured/release evidence; no audio measurements |
 | [.github/](../.github) | CI and operational issue/PR templates, retained separately |

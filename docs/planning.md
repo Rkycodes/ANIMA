@@ -241,6 +241,24 @@ Between boundaries, admit the expected ID when no pair is reserved; duplicates o
 
 Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction; that serializer, RX/TX watchdog integration, retained-age proof and diagnostic counters remain separate work.
 
+### I2S transmitter block contract
+
+The [transmitter](../rtl/audio/anima_i2s_transmitter.v) owns the current serialized pair, separate from scheduler waiting storage. It has no valid/ready backpressure, queue, sample conversion, frame counter or tunable serial format.
+
+| Ports | Representation and timing |
+| --- | --- |
+| audio_clk / reset_n | Processing clock; asynchronous active-low hard-reset assertion and externally synchronized release |
+| warm_reset_apply | One-bit shared synchronous flush, qualified at the left boundary upstream; priority over selection/launch |
+| select_ce | One-bit pre-edge scheduler boundary transaction, asserted every active left boundary; never asserted elsewhere |
+| select_left / select_right | Signed 24-bit whole selected pair; scheduler supplies zero for startup, reset or missing data |
+| sclk_fall_ce | One-bit pre-edge launch enable from serial timing |
+| slot_bit / right_slot | Unsigned five-bit position 0–31 and one-bit channel, shared timing metadata |
+| dac_sdata | One-bit registered serial output; asynchronously zero on hard reset, otherwise changes only on authorized falling-edge launches or shared warm flush |
+
+Capture both samples together on select_ce. Current-pair registers remain unchanged while serializing, even if scheduler inputs change. Slot position 0 launches zero; positions 1–24 launch sample bits 23–0, left then right, on SCLK falling edges. Positions 25–31 and the following position 0 launch zero, including for negative samples. Hold serial output on all other processing edges, including SCLK rising/capture edges. The boundary capture and slot-zero launch can share an edge: no new sample bit is needed until the next falling edge, so nonblocking pair-register updates introduce no MSB delay.
+
+Warm application clears both current samples and data output on its boundary; shared timing keeps running. Hard reset clears samples/data immediately. Missing/extra selection strobes are interface violations, not a serializer retry or underflow policy; the scheduler owns the mandatory per-boundary real-or-zero selection. Cold qualification, physical pin constraints and clock-loss handling remain external. The first-build serial format is fixed here; extending widths/slots would require coordinated timing/RX/scheduler/TX and test changes.
+
 ### Frame IDs, deadlines and late data
 
 Advance ID for **every complete aligned pair**, including overflow rejection; preserve gaps. Cold-qualification ignored pairs consume no IDs. Audio reset flushes all data and restarts IDs **and playback schedule at zero**; controller reconnect does not. External reset epoch reporting is deferred.
