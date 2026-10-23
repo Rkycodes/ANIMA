@@ -218,6 +218,29 @@ An offer accepted at Q first transfers downstream at Q+1 when ready; its head be
 
 Hard reset and warm flush empty the queue; no stale payload is visible or valid after either reset. Outputs are zero when invalid. Logical flush invalidates storage; it does not require clearing every memory bit. Both resets mask transfers and overflow while asserted. The separate diagnostic consumer will sample overflow_event on the rejection edge, increment its saturating counter and retain sticky fault evidence independently of audio flush. The queue does not implement that counter, LED, stall watchdog or an automatic overflow reset.
 
+### Frame scheduler block contract
+
+The scheduler owns TX waiting storage; implementation stays on feat/frame-scheduler. TX_WAIT_DEPTH is a build-time integer, default 1, legal 1/2/4/8. Under the selected next-unfilled-slot policy at most one pair may be reserved; larger settings do not enable future prefetch and require no additional physical entries in bypass. The waiting register holds two signed 24-bit samples; its unsigned 32-bit identity is implicit in the expected schedule counter.
+
+| Ports | Representation and timing |
+| --- | --- |
+| audio_clk / reset_n | Same processing clock; asynchronous hard-reset assertion, externally synchronized release |
+| warm_reset_apply / left_boundary_ce | One-bit pre-edge shared flush / boundary enables; flush wins |
+| in_valid / in_ready | One-bit pair handshake; all input data held until transfer or reset |
+| in_left / in_right / in_frame_id | Signed 24-bit samples and unsigned 32-bit identity, matching RX queue |
+| select_ce | One-bit pre-edge boundary strobe; TX must sample the whole selection on that edge, with no ready/backpressure |
+| select_real | One bit; selected payload is real audio, otherwise whole-pair zero |
+| select_left / select_right | Signed 24-bit selected samples, zero outside real selection; combinational transaction payload, not current serialized storage |
+| select_frame_id | Unsigned 32-bit due ID on a runtime boundary, zero otherwise; meaningful with select_real for real samples |
+| underflow_event / late_discard_event | One-bit pre-edge missing-runtime-pair / accepted-late-pair events for separate diagnostics |
+| ambiguous_id_event | One-bit stream-contract violation, not a sixth diagnostic counter; integration must assert its absence, never authorize this pair |
+
+First left boundary after hard reset starts capture interval zero and selects intentional silence without underflow. Subsequent boundaries select expected IDs 0, 1, ... modulo 2^32. A warm reset at a left boundary selects intentional zeros, empties waiting storage and starts fresh capture zero; the following boundary expects zero. The external cold supervisor must hold/reset the data path through qualification; it is not implemented by this block.
+
+Between boundaries, admit the expected ID when no pair is reserved; duplicates of a reserved ID remain backpressured. At a boundary, promote a reservation before deciding whether an incoming pair reserves the next slot. Compare incoming ID against that next unfilled admission ID: due can enter if space exists, late transfers/discards, future and exactly half-range stay upstream. Thus promotion can accept next-ID replacement, while an empty boundary accepts its due pair directly. A missed slot still advances the schedule; a pair arriving one clock later is discarded. No payload is replayed to catch up. Ambiguous input raises the violation signal; its presence must fail the integrating simulation assertion. Neither stale discard nor a future/ambiguous offer suppresses underflow for an unfilled deadline.
+
+Hard reset masks all events and selection immediately. Warm flush masks transfer/fault events but retains the boundary selection strobe with zero payload, allowing TX to load silence. TX owns the current serialized pair and must capture this pre-edge transaction; that serializer, RX/TX watchdog integration, retained-age proof and diagnostic counters remain separate work.
+
 ### Frame IDs, deadlines and late data
 
 Advance ID for **every complete aligned pair**, including overflow rejection; preserve gaps. Cold-qualification ignored pairs consume no IDs. Audio reset flushes all data and restarts IDs **and playback schedule at zero**; controller reconnect does not. External reset epoch reporting is deferred.

@@ -9,6 +9,7 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 - [Warm-reset controller](#warm-reset-controller)
 - [I2S receiver](#i2s-receiver)
 - [RX frame queue](#rx-frame-queue)
+- [Frame scheduler](#frame-scheduler)
 - [Python preset and frame model](#python-preset-and-frame-model)
 - [Reproduce current checks](#reproduce-current-checks)
 - [Checks actually performed](#checks-actually-performed)
@@ -28,8 +29,9 @@ Evidence baseline: October 23, 2026. Maintained by Robel Yaee and An Tiet. This 
 | Hardware | Basys 3 D.1 on hand, reported by Robel | No board programming, measured clocks or accepted audio result |
 | Timing RTL | Fixed-ratio serial-timing component and independent component testbench; lint and six seeded simulation runs passed | No sample transport, bypass top, codec wrapper or XDC |
 | Warm-reset RTL | Pending-request controller, timing-connected bench and Verilator runner; lint and three seeded runs passed | RX/queue reset application is tested below; TX flush, button conditioning, diagnostics and clock supervision not integrated |
-| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue integration is tested below; no scheduler, TX, cold supervisor or physical ADC validation |
-| RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Overflow event only; no fault counters/LED, watchdog, scheduler, TX or hardware timing evidence |
+| I2S receiver RTL | Separate L/R assembly, registered E+1 pair event and snapshotted 32-bit ID; lint and three Verilator seeds passed | RX queue integration is tested below; no integrated scheduler/TX path, cold supervisor or physical ADC validation |
+| RX frame queue RTL | Stored-head 80-bit FIFO, default depth 2; lint and 12 depth/seed cases plus three receiver-to-queue runs passed | Overflow event only; no fault counters/LED, watchdog, TX or hardware timing evidence |
+| Frame scheduler RTL | Expected-ID selection and owned next-due waiting register | Component validation recorded below; no TX serializer, watchdog or full bypass integration |
 | Firmware / host UART | Directory scaffold only | No firmware or serial utility |
 
 Planning history from docs/planning and An's outstanding python-model commits is included in main at [36dd5d0](https://github.com/Rkycodes/ANIMA/commit/36dd5d07e64754fa7fb265113c94a33a4a0c0f85). An's original commits/authorship are retained; integration corrected whitespace only in two incoming Python files. No model behavior was changed by that merge or this documentation rewrite.
@@ -112,6 +114,21 @@ python scripts/run_rx_frame_queue.py --seed 2026
 The [Verilator-only runner](../scripts/run_rx_frame_queue.py) defaults to 10000 randomized cycles per queue depth, in addition to directed cases and the existing 32-frame-unit receiver stimulus. --cycles accepts 1–100000 and does not represent simulated audio duration. Lint covers all four supported depths and checks that depth 3 fails elaboration. Generated logs remain under ignored build/rx_frame_queue/. Success requires unique pass markers for all four depth cases and the complete suite; the chain itself checks a final empty queue before reporting success.
 
 **Validation status:** strict Verilog-2001 lint passed at depths 1/2/4/8; unsupported depth 3 was rejected with the intended configuration diagnostic. The receiver bench also passed timing-aware lint in its standalone mode. With the corrected nonzero random generator, seeds 1/42/2026 each passed all four depths (12 cases), each using 10000 random cycles plus directed checks. The real receiver-to-default-depth queue chains accepted 322/324/325 pairs respectively, each reporting two deliberate overflow events, and all drained cleanly. The original independent receiver checks also passed in those runs. The initial test-only zero-state seed issue was corrected; queue RTL did not change. Per-seed logs are build/rx_frame_queue/verilator/simulate-seed-<seed>.log. Touched-file UTF-8/LF/whitespace, Python parsing, Markdown structure and 100 local links passed. At the October 23 commit boundary, the repository checker and queue lint/seeded regressions passed again. The Python model regression reported 19 passing tests and the previously recorded end_frame signature error; model/test sources remain unchanged. No scheduler, TX, diagnostic counter/LED, five-minute audio acceptance, synthesis or hardware result is established.
+
+## Frame scheduler
+
+Implemented October 23: [anima_frame_scheduler.v](../rtl/audio/anima_frame_scheduler.v) owns one next-due waiting pair and the unsigned 32-bit playback schedule. It advances only on runtime left boundaries, selects whole-pair zero on underflow, drains late data, blocks future data, and supports empty-slot deadline-edge acceptance plus promotion/replacement. The first hard-reset boundary and warm-reset boundary select intentional silence without underflow. Samples are signed 24 bits. The pre-edge selection transaction must be captured by the future TX serializer; it is not a registered current-output buffer. [Exact interface](planning.md#frame-scheduler-block-contract).
+
+TX_WAIT_DEPTH accepts 1/2/4/8 and rejects unsupported values. The next-unfilled-slot policy permits only one reservation, so larger configurations do not allocate extra bypass storage or authorize future prefetch. Half-range IDs raise ambiguous_id_event and cannot transfer or play. The integration assertion must reject this stream violation; no sixth error counter is introduced.
+
+The [case bench](../sim/audio/anima_frame_scheduler_case.sv) uses an independent interval/reservation-list model and the real timing block. The [suite](../sim/audio/anima_frame_scheduler_tb.sv) instantiates all four configurations. Directed checks cover startup, reserved-head backpressure, promotion/replacement, exact-edge direct acceptance, missed deadlines, stale/future inputs, warm reset and modulo-ID rollover. Rollover uses one explicit test-only counter seed, not billions of frames or a production test port. Each case then runs 120000 randomized processing edges with stable stalled offers and boundary-qualified resets. A separate negative run makes the half-range input fail the integrating assertion.
+
+```sh
+python scripts/run_frame_scheduler.py --lint
+python scripts/run_frame_scheduler.py --seed 2026
+```
+
+The [runner](../scripts/run_frame_scheduler.py) uses Verilator only and saves build/logs under ignored build/frame_scheduler/. **Actual results:** strict Verilog-2001 lint passed at depths 1/2/4/8 and unsupported depth 3 failed elaboration as intended. Final bench seeds 1/42/2026 each passed all four configurations: 12 cases, each with 120000 randomized edges plus directed checks and final drain, totaling 147461 processing edges per case. Each seed also rejected the deliberately ambiguous half-range stream through the integrating assertion. No lint warnings were waived. Touched-file UTF-8/no-BOM, LF/whitespace, Python parsing and 107 local-file/heading links passed. At the authorized scheduler commit boundary, the repository checker and all scheduler lint/seeded checks passed again. The Python model suite, run from the repository root, reported 19 passing tests and the unchanged known end_frame signature error; no model sources were changed. This is component scheduling verification, not receiver-to-TX integration, 300 seconds of simulated audio, synthesis, routed timing or hardware audio validation. No watchdog, diagnostic counters, serializer or cold-start supervisor is implemented here.
 
 ## Python preset and frame model
 
