@@ -15,7 +15,7 @@ module anima_uart_rx #(
     // State machine states for UART
     localparam IDLE             = 3'b000;
     localparam START_RECEIVED   = 3'b001;
-    localparam DATA_RECEPTION   = 3'b010;
+    localparam RECEIVING        = 3'b010;
     localparam STOP             = 3'b011;
     localparam CLEANUP          = 3'b100;
 
@@ -72,7 +72,7 @@ module anima_uart_rx #(
                     if (clk_counter == ((CLKS_PER_BIT - 1) / 2)) begin
                         if (serial_data == 1'b0) begin
                             clk_counter <= 0;
-                            RX_State <= DATA_RECEPTION;
+                            RX_State <= RECEIVING;
                         end else begin
                             // Invalid sample
                             RX_State <= IDLE;
@@ -82,7 +82,7 @@ module anima_uart_rx #(
                     end
                 end
 
-                DATA_RECEPTION : begin
+                RECIEVING : begin
                     if (clk_counter == CLKS_PER_BIT - 1) begin
                         clk_counter <= 0;
                         data_byte[bit_index] <= serial_data;

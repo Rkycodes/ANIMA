@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('--dut', type=Path, default=ROOT / 'rtl/display/anima_uart_rx.v')
+p.add_argument('--dut', type=Path, default=ROOT / 'rtl/control/anima_uart_rx.v')
 a = p.parse_args()
 failed = False
 with tempfile.TemporaryDirectory(prefix='anima-uart-') as tmp:
